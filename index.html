@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skypark Operations</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">Skypark</div>
+  <div class="month-switcher">
+    <button id="month-prev" title="Previous month">‹</button>
+    <span id="month-label"></span>
+    <button id="month-next" title="Next month">›</button>
+  </div>
+  <nav>
+    <button id="tab-dc" class="tab active">Daily Closing</button>
+    <button id="tab-att" class="tab">Attendance &amp; Payroll</button>
+  </nav>
+  <button id="reset-btn" title="Discard local edits and reload seed data">Reset to seed</button>
+</header>
+
+<main id="view-dc">
+  <div class="day-strip" id="day-strip"></div>
+  <div class="dc-grid">
+    <section class="card">
+      <h2>Salaries — Daily <span class="pill" id="dc-wage-total"></span></h2>
+      <table id="dc-staff"></table>
+    </section>
+    <section class="card">
+      <h2>Expenses in Cash <span class="pill" id="dc-exp-total"></span></h2>
+      <table id="dc-expenses"></table>
+      <div class="add-row">
+        <select id="exp-cat"></select>
+        <input id="exp-amt" type="number" min="0" placeholder="Amount">
+        <button id="exp-add">Add</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Sales &amp; Reconciliation</h2>
+      <table id="dc-sales"></table>
+      <div id="dc-recon"></div>
+    </section>
+    <section class="card" id="card-blinkit">
+      <h2>Details of Blinkit <span class="pill" id="blinkit-total"></span></h2>
+      <table id="dc-blinkit"></table>
+      <div class="add-row">
+        <input id="blinkit-item" placeholder="Item">
+        <input id="blinkit-amt" type="number" min="0" placeholder="Amount">
+        <button onclick="addDetail('blinkit')">Add</button>
+      </div>
+      <div class="section-actions">
+        <button class="ghost" onclick="uploadInvoice('blinkit')">📷 Upload invoice</button>
+        <button class="ghost ocr" onclick="ocrAutofill('blinkit')">✨ AI OCR autofill</button>
+      </div>
+      <div class="invoice-strip" id="inv-blinkit"></div>
+    </section>
+    <section class="card" id="card-instamart">
+      <h2>Details of Instamart <span class="pill" id="instamart-total"></span></h2>
+      <table id="dc-instamart"></table>
+      <div class="add-row">
+        <input id="instamart-item" placeholder="Item">
+        <input id="instamart-amt" type="number" min="0" placeholder="Amount">
+        <button onclick="addDetail('instamart')">Add</button>
+      </div>
+      <div class="section-actions">
+        <button class="ghost" onclick="uploadInvoice('instamart')">📷 Upload invoice</button>
+        <button class="ghost ocr" onclick="ocrAutofill('instamart')">✨ AI OCR autofill</button>
+      </div>
+      <div class="invoice-strip" id="inv-instamart"></div>
+    </section>
+  </div>
+</main>
+
+<input type="file" id="file-input" accept="image/*" hidden>
+<div id="img-modal" hidden onclick="this.hidden=true"><img id="img-modal-img"></div>
+
+<main id="view-att" hidden>
+  <section class="card wide">
+    <h2>Attendance — hours per day</h2>
+    <div class="scroll-x"><table id="att-grid"></table></div>
+  </section>
+  <section class="card wide">
+    <h2>Monthly Payroll</h2>
+    <div class="scroll-x"><table id="payroll"></table></div>
+  </section>
+</main>
+
+<script src="seed.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
