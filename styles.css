@@ -33,8 +33,10 @@ tr.total td { font-weight: 700; border-top: 2px solid #d6dbe4; }
 .hrs-toggle { display: inline-flex; gap: 2px; }
 .hrs-toggle button { width: 34px; padding: 4px 0; border: 1px solid #d6dbe4; background: #fff; cursor: pointer; font-size: 12px; }
 .hrs-toggle button:first-child { border-radius: 6px 0 0 6px; }
-.hrs-toggle button:last-child { border-radius: 0 6px 6px 0; }
 .hrs-toggle button.sel { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+.hrs-custom { width: 58px; padding: 4px 6px; border: 1px solid #d6dbe4; border-radius: 0 6px 6px 0; border-left: none; font-size: 12px; margin-left: -1px; }
+.hrs-custom.sel { background: #eef4ff; border-color: #1d4ed8; font-weight: 600; }
+.hrs-custom::placeholder { color: #98a2b3; }
 
 .add-row { display: flex; gap: 8px; margin-top: 10px; }
 .add-row select, .add-row input { padding: 6px 8px; border: 1px solid #d6dbe4; border-radius: 8px; font-size: 13px; }

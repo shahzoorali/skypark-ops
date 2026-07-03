@@ -103,10 +103,15 @@ function renderStaff() {
     const h = dayHours[e.id] ?? null;
     const amt = (h || 0) * e.rate;
     wageTotal += amt;
+    const isPreset = h === 0 || h === 9 || h === 18;
     const btn = (v, label) =>
       `<button class="${h === v ? "sel" : ""}" onclick="setHours(${e.id},${v})">${label}</button>`;
+    const customVal = h !== null && !isPreset ? h : "";
     html += `<tr><td>${e.name}</td><td class="num">${e.rate}</td>
-      <td><span class="hrs-toggle">${btn(0, "Off")}${btn(9, "9")}${btn(18, "18")}</span></td>
+      <td><span class="hrs-toggle">${btn(0, "Off")}${btn(9, "9")}${btn(18, "18")}<input
+        class="hrs-custom ${h !== null && !isPreset ? "sel" : ""}" type="number" min="0" step="0.5"
+        placeholder="custom" value="${customVal}"
+        onchange="setHours(${e.id}, this.value === '' ? null : parseFloat(this.value))"></span></td>
       <td class="num">${h ? fmt(amt) : "–"}</td></tr>`;
   }
   html += `<tr class="total"><td colspan="3">Total daily wages</td><td class="num">₹${fmt(wageTotal)}</td></tr>`;
