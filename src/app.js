@@ -4,6 +4,8 @@ import * as store from "./store.js";
 
 const DOW = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const GROUPS = ["Conti-chefs", "Chinese Chefs", "Helpers", "Housekeeping", "Service"];
+const UNASSIGNED = "Unassigned";
 
 let state = { config: null, months: {} };
 let role = "manager";
@@ -11,8 +13,35 @@ let currentMonth = new Date().toISOString().slice(0, 7);
 let currentDay = 1;
 
 const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString("en-IN");
+const todayISO = () => new Date().toISOString().slice(0, 10);
 const EMPS = () => state.config.employees;
 const CATS = () => state.config.categories;
+
+// backfills fields onto employees loaded from before this feature existed;
+// array position doubles as the manual sort order (no separate index field)
+function normalizeEmployees() {
+  let changed = false;
+  for (const e of EMPS()) {
+    if (e.group === undefined) { e.group = null; changed = true; }
+    if (e.hireDate === undefined) { e.hireDate = null; changed = true; }
+    if (e.fireDate === undefined) { e.fireDate = null; changed = true; }
+  }
+  return changed;
+}
+// day is within [hireDate, fireDate] when those are set; open-ended otherwise
+function isWithinEmployment(e, month, day) {
+  const dateStr = `${month}-${String(day).padStart(2, "0")}`;
+  if (e.hireDate && dateStr < e.hireDate) return false;
+  if (e.fireDate && dateStr > e.fireDate) return false;
+  return true;
+}
+// group employees (in GROUPS order, Unassigned last) preserving relative array order within each group
+function groupEmployees(list) {
+  const byGroup = new Map();
+  for (const g of [...GROUPS, UNASSIGNED]) byGroup.set(g, []);
+  for (const e of list) byGroup.get(e.group || UNASSIGNED).push(e);
+  return [...byGroup.entries()].filter(([, members]) => members.length);
+}
 
 function emptyMonth() {
   return { hours: {}, expenses: {}, sales: {}, adjustments: {}, details: {}, invoices: {} };
@@ -64,6 +93,7 @@ function switchTab(t) {
     document.getElementById("tab-" + id).classList.toggle("active", t === id);
     document.getElementById("view-" + id).hidden = t !== id;
   }
+  if (t === "dc") renderDC();
   if (t === "att") renderAttendance();
   if (t === "admin") renderAdmin();
 }
@@ -96,21 +126,27 @@ function renderStaff() {
   const dayHours = monthData().hours[currentDay] || {};
   let wageTotal = 0;
   let html = "<tr><th>Name</th><th class='num'>Rate/hr</th><th>Hours</th><th class='num'>Amount</th></tr>";
-  const visible = EMPS().filter((e) => e.active || dayHours[e.id] != null);
-  for (const e of visible) {
-    const h = dayHours[e.id] ?? null;
-    const amt = (h || 0) * e.rate;
-    wageTotal += amt;
-    const isPreset = h === 0 || h === 9 || h === 18;
-    const btn = (v, label) =>
-      `<button class="${h === v ? "sel" : ""}" onclick="setHours(${e.id},${v})">${label}</button>`;
-    const customVal = h !== null && !isPreset ? h : "";
-    html += `<tr><td>${e.name}</td><td class="num">${e.rate}</td>
-      <td><span class="hrs-toggle">${btn(0, "Off")}${btn(9, "9")}${btn(18, "18")}<input
-        class="hrs-custom ${h !== null && !isPreset ? "sel" : ""}" type="number" min="0" step="0.5"
-        placeholder="custom" value="${customVal}"
-        onchange="setHours(${e.id}, this.value === '' ? null : parseFloat(this.value))"></span></td>
-      <td class="num">${h ? fmt(amt) : "–"}</td></tr>`;
+  // show a row if they're actively employed on this day (blank entry allowed), or
+  // if a value (including OFF/0) was already recorded — so fired staff's history stays visible
+  const visible = EMPS().filter((e) =>
+    dayHours[e.id] != null || (e.active && isWithinEmployment(e, currentMonth, currentDay)));
+  for (const [group, members] of groupEmployees(visible)) {
+    html += `<tr class="group-row"><td colspan="4">${group}</td></tr>`;
+    for (const e of members) {
+      const h = dayHours[e.id] ?? null;
+      const amt = (h || 0) * e.rate;
+      wageTotal += amt;
+      const isPreset = h === 0 || h === 9 || h === 18;
+      const btn = (v, label) =>
+        `<button class="${h === v ? "sel" : ""}" onclick="setHours(${e.id},${v})">${label}</button>`;
+      const customVal = h !== null && !isPreset ? h : "";
+      html += `<tr><td>${e.name}</td><td class="num">${e.rate}</td>
+        <td><span class="hrs-toggle">${btn(0, "Off")}${btn(9, "9")}${btn(18, "18")}<input
+          class="hrs-custom ${h !== null && !isPreset ? "sel" : ""}" type="number" min="0" step="0.5"
+          placeholder="custom" value="${customVal}"
+          onchange="setHours(${e.id}, this.value === '' ? null : parseFloat(this.value))"></span></td>
+        <td class="num">${h ? fmt(amt) : "–"}</td></tr>`;
+    }
   }
   html += `<tr class="total"><td colspan="3">Total daily wages</td><td class="num">₹${fmt(wageTotal)}</td></tr>`;
   t.innerHTML = html;
@@ -131,7 +167,7 @@ function imgCell(kind, row, i) {
       ? `<span title="Photo syncing…">⏳</span>`
       : `<button class="clip-btn" title="Attach invoice photo" onclick="attachRowImg('${kind}',${i})">📎</button>`;
 }
-function renderExpenses() {
+function renderExpenses(wageTotal) {
   const t = document.getElementById("dc-expenses");
   const rows = monthData().expenses[currentDay] || [];
   let total = 0;
@@ -145,6 +181,8 @@ function renderExpenses() {
   html += `<tr class="total"><td>Total expenses</td><td class="num">₹${fmt(total)}</td><td></td><td></td></tr>`;
   t.innerHTML = html;
   document.getElementById("dc-exp-total").textContent = "₹" + fmt(total);
+  document.getElementById("dc-today-total").textContent =
+    `TOTAL EXPENSES TODAY ₹${fmt(wageTotal - total)}`;
   document.getElementById("exp-cat-list").innerHTML =
     CATS().map((c) => `<option value="${c}">`).join("");
   return total;
@@ -308,7 +346,7 @@ function renderSales(wageTotal, expTotal) {
 function renderDC() {
   renderDayStrip();
   const wages = renderStaff();
-  const exp = renderExpenses();
+  const exp = renderExpenses(wages);
   renderSales(wages, exp);
   renderDetails();
 }
@@ -374,9 +412,32 @@ function setRate(empId, val) {
   EMPS().find((e) => e.id === empId).rate = rate;
   persistConfig(); renderAdmin();
 }
-function toggleActive(empId) {
+function fireEmployee(empId) {
   const e = EMPS().find((e) => e.id === empId);
-  e.active = !e.active;
+  if (!confirm(`Mark ${e.name} as fired (${todayISO()})? They'll no longer appear for new hours entry, but all history stays.`)) return;
+  e.active = false;
+  e.fireDate = todayISO();
+  persistConfig(); renderAdmin();
+}
+function rehireEmployee(empId) {
+  const e = EMPS().find((e) => e.id === empId);
+  e.active = true;
+  e.fireDate = null;
+  persistConfig(); renderAdmin();
+}
+function setGroup(empId, group) {
+  EMPS().find((e) => e.id === empId).group = group || null;
+  persistConfig(); renderAdmin();
+}
+// swap with the nearest neighbor in the same group; array position is the sort order
+function moveEmployee(empId, dir) {
+  const arr = EMPS();
+  const idx = arr.findIndex((e) => e.id === empId);
+  const group = arr[idx].group;
+  let j = idx + dir;
+  while (j >= 0 && j < arr.length && arr[j].group !== group) j += dir;
+  if (j < 0 || j >= arr.length) return;
+  [arr[idx], arr[j]] = [arr[j], arr[idx]];
   persistConfig(); renderAdmin();
 }
 // true only if we can prove (from months loaded into memory) the employee never
@@ -389,7 +450,7 @@ function hasAnyRecordedHours(empId) {
 function removeEmployee(empId) {
   const e = EMPS().find((e) => e.id === empId);
   if (hasAnyRecordedHours(empId)) {
-    alert(`${e.name} has recorded hours on file — archive instead of removing, so payroll history stays intact.`);
+    alert(`${e.name} has recorded hours on file — fire instead of removing, so payroll history stays intact.`);
     return;
   }
   if (!confirm(`Remove ${e.name} entirely? This can't be undone.`)) return;
@@ -399,14 +460,16 @@ function removeEmployee(empId) {
 function addEmployee() {
   const name = document.getElementById("new-emp-name").value.trim();
   const rate = parseFloat(document.getElementById("new-emp-rate").value);
+  const group = document.getElementById("new-emp-group").value || null;
   if (!name || !(rate >= 0)) return;
   if (EMPS().some((e) => e.name.toLowerCase() === name.toLowerCase())) {
     alert(`"${name}" already exists.`); return;
   }
   const id = Math.max(0, ...EMPS().map((e) => e.id)) + 1;
-  EMPS().push({ id, name, rate, active: true });
+  EMPS().push({ id, name, rate, active: true, group, hireDate: todayISO(), fireDate: null });
   document.getElementById("new-emp-name").value = "";
   document.getElementById("new-emp-rate").value = "";
+  document.getElementById("new-emp-group").value = "";
   persistConfig(); renderAdmin();
 }
 function addCategory() {
@@ -424,23 +487,39 @@ function delCategory(i) {
   persistConfig(); renderAdmin();
 }
 
+function groupOptions(selected) {
+  const opt = (v, label) => `<option value="${v}" ${(selected || "") === v ? "selected" : ""}>${label}</option>`;
+  return opt("", UNASSIGNED) + GROUPS.map((g) => opt(g, g)).join("");
+}
 function renderAdmin() {
+  if (normalizeEmployees() && role === "admin") persistConfig();
   const md = monthData();
   const monthHours = (id) =>
     Object.values(md.hours).reduce((t, day) => t + (day[id] || 0), 0);
-  let html = `<tr><th>Name</th><th class='num'>Rate/hr</th><th class='num'>Hrs (${monthLabel(currentMonth)})</th><th>Status</th><th></th></tr>`;
-  for (const e of EMPS()) {
-    const removable = !hasAnyRecordedHours(e.id);
-    html += `<tr class="${e.active ? "" : "inactive"}"><td>${e.name}</td>
-      <td class="num"><input type="number" min="0" step="0.01" value="${e.rate}"
-        onchange="setRate(${e.id}, this.value)"></td>
-      <td class="num">${monthHours(e.id) || "–"}</td>
-      <td><button class="ghost sm ${e.active ? "" : "off"}" onclick="toggleActive(${e.id})"
-        title="${e.active ? "Archive: hide from day entry, keep payroll history" : "Restore to active staff"}">
-        ${e.active ? "Active" : "Archived"}</button></td>
-      <td>${removable
-        ? `<button class="del-btn" title="Remove entirely (no recorded hours yet)" onclick="removeEmployee(${e.id})">×</button>`
-        : ""}</td></tr>`;
+  let html = `<tr><th>Name</th><th>Group</th><th class='num'>Rate/hr</th><th class='num'>Hrs (${monthLabel(currentMonth)})</th>
+    <th>Hired</th><th>Fired</th><th>Order</th><th>Status</th><th></th></tr>`;
+  for (const [group, members] of groupEmployees(EMPS())) {
+    html += `<tr class="group-row"><td colspan="9">${group}</td></tr>`;
+    members.forEach((e, i) => {
+      const removable = !hasAnyRecordedHours(e.id);
+      html += `<tr class="${e.active ? "" : "inactive"}"><td>${e.name}</td>
+        <td><select onchange="setGroup(${e.id}, this.value)">${groupOptions(e.group)}</select></td>
+        <td class="num"><input type="number" min="0" step="0.01" value="${e.rate}"
+          onchange="setRate(${e.id}, this.value)"></td>
+        <td class="num">${monthHours(e.id) || "–"}</td>
+        <td>${e.hireDate || "–"}</td>
+        <td>${e.fireDate || "–"}</td>
+        <td class="reorder">
+          <button class="ghost sm" ${i === 0 ? "disabled" : ""} title="Move up" onclick="moveEmployee(${e.id},-1)">↑</button>
+          <button class="ghost sm" ${i === members.length - 1 ? "disabled" : ""} title="Move down" onclick="moveEmployee(${e.id},1)">↓</button>
+        </td>
+        <td>${e.active
+          ? `<button class="ghost sm off" title="Fire: hide from day entry, keep payroll history" onclick="fireEmployee(${e.id})">Fire</button>`
+          : `<button class="ghost sm" title="Restore to active staff" onclick="rehireEmployee(${e.id})">Rehire</button>`}</td>
+        <td>${removable
+          ? `<button class="del-btn" title="Remove entirely (no recorded hours yet)" onclick="removeEmployee(${e.id})">×</button>`
+          : ""}</td></tr>`;
+    });
   }
   document.getElementById("admin-staff").innerHTML = html;
   document.getElementById("admin-staff-count").textContent =
@@ -459,7 +538,7 @@ async function seedIfEmpty() {
   if (!state.config) {
     if (role !== "admin") throw new Error("App not initialised yet — ask an admin to sign in once first.");
     state.config = {
-      employees: SEED.employees.map((e) => ({ ...e, active: true })),
+      employees: SEED.employees.map((e) => ({ ...e, active: true, group: null, hireDate: null, fireDate: null })),
       categories: [...SEED.expenseCategories],
     };
     await store.createConfig(state.config);
@@ -488,7 +567,7 @@ export async function startApp(session) {
   Object.assign(window, {
     setHours, delExpense, addDetail, delDetail, attachRowImg, uploadInvoice,
     ocrAutofill, showImg, showImgSrc, delInvoice, setSales, setAdj,
-    setRate, toggleActive, removeEmployee, delCategory,
+    setRate, fireEmployee, rehireEmployee, setGroup, moveEmployee, removeEmployee, delCategory,
   });
 
   // static buttons
@@ -526,6 +605,7 @@ export async function startApp(session) {
 
   state.config = await store.loadConfig();
   await seedIfEmpty();
+  if (normalizeEmployees() && role === "admin") persistConfig();
   await ensureMonthLoaded(currentMonth);
   renderMonthLabel();
   renderAll();

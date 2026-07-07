@@ -101,3 +101,14 @@ td.empty { color: #98a2b3; font-style: italic; white-space: normal; }
 .sync-ok { color: #6ee7b7; }
 .sync-err { color: #fda4af; }
 #signout-btn { background: transparent; border: 1px solid #3b4a6b; color: #93a5c4; border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+
+/* employee groups & reorder */
+tr.group-row td { background: #eef2f7; font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: #475467; padding: 6px 8px; }
+.reorder { white-space: nowrap; }
+.reorder button { width: 24px; padding: 2px 0; }
+.reorder button:disabled { opacity: .3; cursor: default; }
+#admin-staff select { padding: 3px 5px; border: 1px solid #d6dbe4; border-radius: 6px; font-size: 12px; }
+#new-emp-group { padding: 6px 8px; border: 1px solid #d6dbe4; border-radius: 8px; font-size: 13px; }
+
+/* today's net line under Expenses in Cash */
+.today-total-line { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #d6dbe4; font-weight: 700; font-size: 13px; color: #1d4ed8; }

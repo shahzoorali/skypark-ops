@@ -47,6 +47,7 @@
     <section class="card">
       <h2>Expenses in Cash <span class="pill" id="dc-exp-total"></span></h2>
       <table id="dc-expenses"></table>
+      <div class="today-total-line" id="dc-today-total"></div>
       <div class="add-row">
         <input id="exp-cat" list="exp-cat-list" placeholder="Item (pick or type new)">
         <datalist id="exp-cat-list"></datalist>
@@ -123,11 +124,19 @@
   <div class="dc-grid admin-grid">
     <section class="card">
       <h2>Staff &amp; Rates <span class="pill" id="admin-staff-count"></span></h2>
-      <p class="hint">Rate changes apply to all months (no rate history yet). Archive staff who leave so payroll history stays intact — Remove (×) only appears for staff with no recorded hours yet, e.g. added by mistake.</p>
+      <p class="hint">Rate changes apply to all months (no rate history yet). Use ↑↓ to set the order staff appear in on Daily Closing. Fire staff who leave so payroll history stays intact — Remove (×) only appears for staff with no recorded hours yet, e.g. added by mistake. Hire/Fire dates are shown here only.</p>
       <table id="admin-staff"></table>
       <div class="add-row">
         <input id="new-emp-name" placeholder="New staff name">
         <input id="new-emp-rate" type="number" min="0" step="0.01" placeholder="Rate/hr">
+        <select id="new-emp-group">
+          <option value="">Unassigned</option>
+          <option>Conti-chefs</option>
+          <option>Chinese Chefs</option>
+          <option>Helpers</option>
+          <option>Housekeeping</option>
+          <option>Service</option>
+        </select>
         <button id="add-emp-btn">Add</button>
       </div>
     </section>
