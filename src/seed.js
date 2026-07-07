@@ -177,3 +177,5 @@ const SEED = {
     },
   },
 };
+
+export { SEED, SEED_MONTH };

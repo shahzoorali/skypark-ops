@@ -1,13 +1,19 @@
 version: 1
+backend:
+  phases:
+    build:
+      commands:
+        - npm ci
+        - npx ampx pipeline-deploy --branch $AWS_BRANCH --app-id $AWS_APP_ID
 frontend:
   phases:
     build:
       commands:
-        - mkdir -p dist
-        - cp index.html app.js seed.js styles.css dist/
+        - npm run build
   artifacts:
     baseDirectory: dist
     files:
       - '**/*'
   cache:
-    paths: []
+    paths:
+      - node_modules/**/*

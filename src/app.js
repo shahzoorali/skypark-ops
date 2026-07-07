@@ -1,36 +1,22 @@
-// Skypark ops prototype — state = seed data + localStorage overlay
-const LS_KEY = "sp-expenses-v3"; // bumped so the refreshed July seed replaces stale cached data
+// Skypark ops — UI layer. In-memory state loaded from / persisted to the cloud store.
+import { SEED, SEED_MONTH } from "./seed.js";
+import * as store from "./store.js";
+
 const DOW = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+let state = { config: null, months: {} };
+let role = "manager";
+let currentMonth = new Date().toISOString().slice(0, 7);
+let currentDay = 1;
+
+const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString("en-IN");
+const EMPS = () => state.config.employees;
+const CATS = () => state.config.categories;
 
 function emptyMonth() {
   return { hours: {}, expenses: {}, sales: {}, adjustments: {}, details: {}, invoices: {} };
 }
-
-function loadState() {
-  const saved = localStorage.getItem(LS_KEY);
-  let s = null;
-  if (saved) { try { s = JSON.parse(saved); } catch (e) {} }
-  if (!s) s = { months: {} };
-  s.months = s.months || {};
-  if (!s.months[SEED_MONTH]) s.months[SEED_MONTH] = JSON.parse(JSON.stringify(SEED.months[SEED_MONTH]));
-  // admin-editable config, seeded once from SEED then owned by the admin tab
-  if (!s.config) s.config = {
-    employees: SEED.employees.map((e) => ({ ...e, active: true })),
-    categories: [...SEED.expenseCategories],
-  };
-  return s;
-}
-let state = loadState();
-const EMPS = () => state.config.employees;
-const CATS = () => state.config.categories;
-
-// currentMonth is "YYYY-MM"; default to the seed month so there's data on first load
-let currentMonth = SEED_MONTH;
-let currentDay = 1;
-
-const save = () => localStorage.setItem(LS_KEY, JSON.stringify(state));
-const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString("en-IN");
 
 // ---- month helpers ----
 function monthData() {
@@ -48,11 +34,28 @@ function shiftMonth(key, delta) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+// ---- persistence hooks ----
+const persistDay = () => store.saveDay(currentMonth, currentDay, monthData());
+const persistAdjustments = () => store.saveAdjustments(currentMonth, monthData().adjustments);
+const persistConfig = () => store.saveConfig(state.config);
+
+async function ensureMonthLoaded(month) {
+  if (state.months[month]) return;
+  const md = await store.loadMonth(month);
+  await store.resolveInvoiceUrls(md);
+  state.months[month] = md;
+}
+
 function renderMonthLabel() {
   document.getElementById("month-label").textContent = monthLabel(currentMonth);
 }
-document.getElementById("month-prev").onclick = () => { currentMonth = shiftMonth(currentMonth, -1); currentDay = 1; renderMonthLabel(); renderAll(); };
-document.getElementById("month-next").onclick = () => { currentMonth = shiftMonth(currentMonth, 1); currentDay = 1; renderMonthLabel(); renderAll(); };
+async function gotoMonth(delta) {
+  currentMonth = shiftMonth(currentMonth, delta);
+  currentDay = 1;
+  renderMonthLabel();
+  await ensureMonthLoaded(currentMonth);
+  renderAll();
+}
 
 // ---- tabs ----
 const TABS = ["dc", "att", "admin"];
@@ -64,18 +67,6 @@ function switchTab(t) {
   if (t === "att") renderAttendance();
   if (t === "admin") renderAdmin();
 }
-for (const id of TABS) document.getElementById("tab-" + id).onclick = () => switchTab(id);
-
-document.getElementById("reset-btn").onclick = () => {
-  if (confirm(`Discard local edits for ${monthLabel(currentMonth)} and reload seed data (if any)?`)) {
-    if (currentMonth === SEED_MONTH) {
-      state.months[SEED_MONTH] = JSON.parse(JSON.stringify(SEED.months[SEED_MONTH]));
-    } else {
-      state.months[currentMonth] = emptyMonth();
-    }
-    save(); renderAll();
-  }
-};
 
 // ---- day strip ----
 function renderDayStrip() {
@@ -97,7 +88,7 @@ function setHours(empId, hrs) {
   const md = monthData();
   if (!md.hours[currentDay]) md.hours[currentDay] = {};
   md.hours[currentDay][empId] = hrs;
-  save(); renderDC();
+  persistDay(); renderDC();
 }
 
 function renderStaff() {
@@ -130,7 +121,15 @@ function renderStaff() {
 // ---- daily closing: expenses ----
 function delExpense(i) {
   monthData().expenses[currentDay].splice(i, 1);
-  save(); renderDC();
+  persistDay(); renderDC();
+}
+function imgCell(kind, row, i) {
+  const url = row.img ? store.invoiceUrl(row.img) : null;
+  return url
+    ? `<img class="thumb" src="${url}" onclick="showImg('${kind}',${i})" title="View invoice">`
+    : row.img
+      ? `<span title="Photo syncing…">⏳</span>`
+      : `<button class="clip-btn" title="Attach invoice photo" onclick="attachRowImg('${kind}',${i})">📎</button>`;
 }
 function renderExpenses() {
   const t = document.getElementById("dc-expenses");
@@ -139,32 +138,17 @@ function renderExpenses() {
   let html = "<tr><th>Item</th><th class='num'>Amount</th><th></th><th></th></tr>";
   rows.forEach((r, i) => {
     total += r.amount;
-    const proof = r.img
-      ? `<img class="thumb" src="${r.img}" onclick="showImg('${"exp"}',${i})" title="View invoice">`
-      : `<button class="clip-btn" title="Attach invoice photo" onclick="attachRowImg('exp',${i})">📎</button>`;
     html += `<tr><td>${r.item}</td><td class="num">${fmt(r.amount)}</td>
-      <td>${proof}</td>
+      <td>${imgCell("exp", r, i)}</td>
       <td><button class="del-btn" title="Remove" onclick="delExpense(${i})">×</button></td></tr>`;
   });
   html += `<tr class="total"><td>Total expenses</td><td class="num">₹${fmt(total)}</td><td></td><td></td></tr>`;
   t.innerHTML = html;
   document.getElementById("dc-exp-total").textContent = "₹" + fmt(total);
-
   document.getElementById("exp-cat-list").innerHTML =
     CATS().map((c) => `<option value="${c}">`).join("");
   return total;
 }
-document.getElementById("exp-add").onclick = () => {
-  const item = document.getElementById("exp-cat").value.trim();
-  const amt = parseFloat(document.getElementById("exp-amt").value);
-  if (!item || !amt) return;
-  const md = monthData();
-  if (!md.expenses[currentDay]) md.expenses[currentDay] = [];
-  md.expenses[currentDay].push({ item, amount: amt });
-  document.getElementById("exp-cat").value = "";
-  document.getElementById("exp-amt").value = "";
-  save(); renderDC();
-};
 
 // ---- detail sections (Blinkit / Instamart purchases, Due, Discounts) ----
 const DETAIL_SECTIONS = ["blinkit", "instamart", "due", "discounts"];
@@ -184,12 +168,12 @@ function addDetail(section) {
   md.details[currentDay][section].push({ item, amount: amt });
   document.getElementById(section + "-item").value = "";
   document.getElementById(section + "-amt").value = "";
-  save(); renderDC();
+  persistDay(); renderDC();
 }
 
 function delDetail(section, i) {
   monthData().details[currentDay][section].splice(i, 1);
-  save(); renderDC();
+  persistDay(); renderDC();
 }
 
 function renderDetails() {
@@ -199,11 +183,8 @@ function renderDetails() {
     let html = "<tr><th>S.no</th><th>Item</th><th class='num'>Amount</th><th></th><th></th></tr>";
     rows.forEach((r, i) => {
       total += r.amount;
-      const proof = r.img
-        ? `<img class="thumb" src="${r.img}" onclick="showImg('${sec}',${i})" title="View invoice">`
-        : `<button class="clip-btn" title="Attach invoice photo" onclick="attachRowImg('${sec}',${i})">📎</button>`;
       html += `<tr><td>${i + 1}</td><td>${r.item}</td><td class="num">${fmt(r.amount)}</td>
-        <td>${proof}</td>
+        <td>${imgCell(sec, r, i)}</td>
         <td><button class="del-btn" title="Remove" onclick="delDetail('${sec}',${i})">×</button></td></tr>`;
     });
     if (!rows.length) html += `<tr><td colspan="5" class="empty">No items yet — ${
@@ -212,14 +193,16 @@ function renderDetails() {
     document.getElementById("dc-" + sec).innerHTML = html;
     document.getElementById(sec + "-total").textContent = "₹" + fmt(total);
 
-    // section-level invoice gallery (only purchase sections have one)
     const gallery = document.getElementById("inv-" + sec);
     if (gallery) {
       const invs = (monthData().invoices[currentDay] || {})[sec] || [];
-      gallery.innerHTML = invs.map((src, i) =>
-        `<span class="inv-wrap"><img class="thumb lg" src="${src}" onclick="showImgSrc('${sec}',${i})">
-         <button class="del-btn" title="Remove invoice" onclick="delInvoice('${sec}',${i})">×</button></span>`
-      ).join("");
+      gallery.innerHTML = invs.map((key, i) => {
+        const url = store.invoiceUrl(key);
+        return `<span class="inv-wrap">${url
+          ? `<img class="thumb lg" src="${url}" onclick="showImgSrc('${sec}',${i})">`
+          : `<span title="Photo syncing…">⏳</span>`}
+         <button class="del-btn" title="Remove invoice" onclick="delInvoice('${sec}',${i})">×</button></span>`;
+      }).join("");
     }
   }
 }
@@ -237,28 +220,29 @@ fileInput.onchange = () => {
   if (!f || !pendingTarget) return;
   const img = new Image();
   img.onload = () => {
-    // resize to keep localStorage small; a real backend would store the original
-    const scale = Math.min(1, 1000 / Math.max(img.width, img.height));
+    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
     const c = document.createElement("canvas");
     c.width = img.width * scale; c.height = img.height * scale;
     c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-    const dataUrl = c.toDataURL("image/jpeg", 0.7);
-    const t = pendingTarget;
-    const md = monthData();
-    try {
-      if (t.type === "row") {
-        const rows = t.kind === "exp" ? md.expenses[currentDay] : md.details[currentDay][t.kind];
-        rows[t.idx].img = dataUrl;
-      } else {
-        if (!md.invoices[currentDay]) md.invoices[currentDay] = {};
-        if (!md.invoices[currentDay][t.kind]) md.invoices[currentDay][t.kind] = [];
-        md.invoices[currentDay][t.kind].push(dataUrl);
+    c.toBlob(async (blob) => {
+      const t = pendingTarget;
+      const md = monthData();
+      try {
+        const key = await store.uploadInvoiceBlob(currentMonth, currentDay, blob);
+        if (t.type === "row") {
+          const rows = t.kind === "exp" ? md.expenses[currentDay] : md.details[currentDay][t.kind];
+          rows[t.idx].img = key;
+        } else {
+          if (!md.invoices[currentDay]) md.invoices[currentDay] = {};
+          if (!md.invoices[currentDay][t.kind]) md.invoices[currentDay][t.kind] = [];
+          md.invoices[currentDay][t.kind].push(key);
+        }
+        persistDay();
+      } catch (e) {
+        alert("Photo upload failed — check your connection and try again.");
       }
-      save();
-    } catch (e) {
-      alert("Could not save image locally (storage full). A real backend would lift this limit.");
-    }
-    renderDC();
+      renderDC();
+    }, "image/jpeg", 0.8);
     URL.revokeObjectURL(img.src);
   };
   img.src = URL.createObjectURL(f);
@@ -266,28 +250,31 @@ fileInput.onchange = () => {
 
 function delInvoice(section, i) {
   monthData().invoices[currentDay][section].splice(i, 1);
-  save(); renderDC();
+  persistDay(); renderDC();
 }
 
 const modal = document.getElementById("img-modal");
+modal.onclick = () => { modal.hidden = true; };
 function openModal(src) { document.getElementById("img-modal-img").src = src; modal.hidden = false; }
 function showImg(kind, idx) {
   const md = monthData();
   const rows = kind === "exp" ? md.expenses[currentDay] : md.details[currentDay][kind];
-  openModal(rows[idx].img);
+  openModal(store.invoiceUrl(rows[idx].img));
 }
-function showImgSrc(section, i) { openModal(monthData().invoices[currentDay][section][i]); }
+function showImgSrc(section, i) {
+  openModal(store.invoiceUrl(monthData().invoices[currentDay][section][i]));
+}
 
 // ---- AI OCR autofill (stub — integration point) ----
-async function ocrAutofill(section) {
+function ocrAutofill(section) {
   const invs = (monthData().invoices[currentDay] || {})[section] || [];
   if (!invs.length) { alert("Upload an invoice photo first, then run AI OCR autofill."); return; }
-  // Integration point: send invs[] (base64 images) to an OCR/vision API
-  // (e.g. Claude vision) and parse line items into {item, amount} rows:
-  //   const items = await extractLineItems(invs);
-  //   monthData().details[currentDay][section].push(...items); save(); renderDC();
+  // Integration point: a Lambda can fetch these S3 keys, call a vision model,
+  // and return {item, amount} rows to push into details[currentDay][section].
   alert("AI OCR coming soon: the uploaded invoice will be read automatically and line items filled into this table.");
 }
+
+// ---- sales & reconciliation ----
 const SALES_FIELDS = [
   ["totalSale", "Total Sale"], ["card", "Card"], ["upi", "UPI"], ["due", "Due"],
   ["swiggy", "Swiggy"], ["zomato", "Zomato"], ["cashInHand", "Cash in hand"],
@@ -296,7 +283,7 @@ function setSales(field, val) {
   const md = monthData();
   if (!md.sales[currentDay]) md.sales[currentDay] = {};
   md.sales[currentDay][field] = parseFloat(val) || 0;
-  save(); renderDC();
+  persistDay(); renderDC();
 }
 function renderSales(wageTotal, expTotal) {
   const s = monthData().sales[currentDay] || {};
@@ -331,7 +318,7 @@ function setAdj(empId, field, val) {
   const md = monthData();
   if (!md.adjustments[empId]) md.adjustments[empId] = { loanTaken:0, loanDeducted:0, penalties:0, incentives:0 };
   md.adjustments[empId][field] = parseFloat(val) || 0;
-  save(); renderAttendance();
+  persistAdjustments(); renderAttendance();
 }
 
 function renderAttendance() {
@@ -385,12 +372,12 @@ function setRate(empId, val) {
   const rate = parseFloat(val);
   if (!(rate >= 0)) { renderAdmin(); return; }
   EMPS().find((e) => e.id === empId).rate = rate;
-  save(); renderAdmin();
+  persistConfig(); renderAdmin();
 }
 function toggleActive(empId) {
   const e = EMPS().find((e) => e.id === empId);
   e.active = !e.active;
-  save(); renderAdmin();
+  persistConfig(); renderAdmin();
 }
 function addEmployee() {
   const name = document.getElementById("new-emp-name").value.trim();
@@ -403,7 +390,7 @@ function addEmployee() {
   EMPS().push({ id, name, rate, active: true });
   document.getElementById("new-emp-name").value = "";
   document.getElementById("new-emp-rate").value = "";
-  save(); renderAdmin();
+  persistConfig(); renderAdmin();
 }
 function addCategory() {
   const c = document.getElementById("new-cat").value.trim();
@@ -413,11 +400,11 @@ function addCategory() {
   }
   CATS().push(c);
   document.getElementById("new-cat").value = "";
-  save(); renderAdmin();
+  persistConfig(); renderAdmin();
 }
 function delCategory(i) {
   CATS().splice(i, 1);
-  save(); renderAdmin();
+  persistConfig(); renderAdmin();
 }
 
 function renderAdmin() {
@@ -443,6 +430,81 @@ function renderAdmin() {
   document.getElementById("admin-cat-count").textContent = CATS().length + " categories";
 }
 
-function renderAll() { renderDC(); renderAttendance(); renderAdmin(); }
-renderMonthLabel();
-renderAll();
+function renderAll() { renderDC(); renderAttendance(); if (role === "admin") renderAdmin(); }
+
+// ---- first-run seeding (admin only): push config + July data to the cloud ----
+async function seedIfEmpty() {
+  if (!state.config) {
+    if (role !== "admin") throw new Error("App not initialised yet — ask an admin to sign in once first.");
+    state.config = {
+      employees: SEED.employees.map((e) => ({ ...e, active: true })),
+      categories: [...SEED.expenseCategories],
+    };
+    await store.createConfig(state.config);
+  }
+  if (role !== "admin") return;
+  const seedMd = await store.loadMonth(SEED_MONTH);
+  const isEmpty = !Object.keys(seedMd.hours).length && !Object.keys(seedMd.expenses).length;
+  if (!isEmpty) { state.months[SEED_MONTH] = seedMd; return; }
+  const s = SEED.months[SEED_MONTH];
+  const md = { ...emptyMonth(), ...JSON.parse(JSON.stringify(s)) };
+  state.months[SEED_MONTH] = md;
+  const days = new Set([
+    ...Object.keys(md.hours), ...Object.keys(md.expenses),
+    ...Object.keys(md.sales), ...Object.keys(md.details),
+  ]);
+  for (const d of days) await store.saveDay(SEED_MONTH, Number(d), md);
+  await store.saveAdjustments(SEED_MONTH, md.adjustments);
+  console.log(`seeded ${days.size} days into ${SEED_MONTH}`);
+}
+
+// ---- boot ----
+export async function startApp(session) {
+  role = session.role;
+
+  // expose handlers used by generated row HTML
+  Object.assign(window, {
+    setHours, delExpense, addDetail, delDetail, attachRowImg, uploadInvoice,
+    ocrAutofill, showImg, showImgSrc, delInvoice, setSales, setAdj,
+    setRate, toggleActive, delCategory,
+  });
+
+  // static buttons
+  document.getElementById("month-prev").onclick = () => gotoMonth(-1);
+  document.getElementById("month-next").onclick = () => gotoMonth(1);
+  for (const id of TABS) document.getElementById("tab-" + id).onclick = () => switchTab(id);
+  document.getElementById("exp-add").onclick = () => {
+    const item = document.getElementById("exp-cat").value.trim();
+    const amt = parseFloat(document.getElementById("exp-amt").value);
+    if (!item || !amt) return;
+    const md = monthData();
+    if (!md.expenses[currentDay]) md.expenses[currentDay] = [];
+    md.expenses[currentDay].push({ item, amount: amt });
+    document.getElementById("exp-cat").value = "";
+    document.getElementById("exp-amt").value = "";
+    persistDay(); renderDC();
+  };
+  document.querySelectorAll("[data-add-detail]").forEach((b) => b.onclick = () => addDetail(b.dataset.addDetail));
+  document.querySelectorAll("[data-upload-invoice]").forEach((b) => b.onclick = () => uploadInvoice(b.dataset.uploadInvoice));
+  document.querySelectorAll("[data-ocr]").forEach((b) => b.onclick = () => ocrAutofill(b.dataset.ocr));
+  document.getElementById("add-emp-btn").onclick = addEmployee;
+  document.getElementById("add-cat-btn").onclick = addCategory;
+  document.getElementById("signout-btn").onclick = async () => { await store.logout(); location.reload(); };
+
+  // managers don't see the admin tab
+  if (role !== "admin") document.getElementById("tab-admin").style.display = "none";
+
+  // sync indicator
+  const sync = document.getElementById("sync-status");
+  store.setSyncListener((n) => {
+    if (n === -1) { sync.textContent = "⚠ sync error"; sync.className = "sync-err"; return; }
+    sync.textContent = n > 0 ? "Saving…" : "Saved ✓";
+    sync.className = n > 0 ? "sync-busy" : "sync-ok";
+  });
+
+  state.config = await store.loadConfig();
+  await seedIfEmpty();
+  await ensureMonthLoaded(currentMonth);
+  renderMonthLabel();
+  renderAll();
+}
