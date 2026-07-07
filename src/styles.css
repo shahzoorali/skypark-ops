@@ -85,6 +85,7 @@ td.empty { color: #98a2b3; font-style: italic; white-space: normal; }
 
 /* login */
 #login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #101828; }
+#login-screen[hidden] { display: none; }
 .login-card { background: #fff; border-radius: 14px; padding: 32px 30px; width: 340px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
 .login-card h1 { margin: 0; font-size: 22px; }
 .login-card h1 span { font-weight: 400; color: #667085; }
