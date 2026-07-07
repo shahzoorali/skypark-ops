@@ -17,6 +17,7 @@
   <nav>
     <button id="tab-dc" class="tab active">Daily Closing</button>
     <button id="tab-att" class="tab">Attendance &amp; Payroll</button>
+    <button id="tab-admin" class="tab">Admin</button>
   </nav>
   <button id="reset-btn" title="Discard local edits and reload seed data">Reset to seed</button>
 </header>
@@ -32,7 +33,8 @@
       <h2>Expenses in Cash <span class="pill" id="dc-exp-total"></span></h2>
       <table id="dc-expenses"></table>
       <div class="add-row">
-        <select id="exp-cat"></select>
+        <input id="exp-cat" list="exp-cat-list" placeholder="Item (pick or type new)">
+        <datalist id="exp-cat-list"></datalist>
         <input id="exp-amt" type="number" min="0" placeholder="Amount">
         <button id="exp-add">Add</button>
       </div>
@@ -86,6 +88,30 @@
         <input id="discounts-item" placeholder="Channel (Swiggy, Zomato…)">
         <input id="discounts-amt" type="number" min="0" placeholder="Amount">
         <button onclick="addDetail('discounts')">Add</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<main id="view-admin" hidden>
+  <div class="dc-grid admin-grid">
+    <section class="card">
+      <h2>Staff &amp; Rates <span class="pill" id="admin-staff-count"></span></h2>
+      <p class="hint">Rate changes apply to all months (no rate history yet). Deactivate staff who leave — history stays intact.</p>
+      <table id="admin-staff"></table>
+      <div class="add-row">
+        <input id="new-emp-name" placeholder="New staff name">
+        <input id="new-emp-rate" type="number" min="0" step="0.01" placeholder="Rate/hr">
+        <button onclick="addEmployee()">Add</button>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Expense Categories <span class="pill" id="admin-cat-count"></span></h2>
+      <p class="hint">Suggestions shown when adding a cash expense. Managers can also type one-off items freely.</p>
+      <div class="chips" id="admin-cats"></div>
+      <div class="add-row">
+        <input id="new-cat" placeholder="New category">
+        <button onclick="addCategory()">Add</button>
       </div>
     </section>
   </div>

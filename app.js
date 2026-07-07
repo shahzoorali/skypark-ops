@@ -14,9 +14,16 @@ function loadState() {
   if (!s) s = { months: {} };
   s.months = s.months || {};
   if (!s.months[SEED_MONTH]) s.months[SEED_MONTH] = JSON.parse(JSON.stringify(SEED.months[SEED_MONTH]));
+  // admin-editable config, seeded once from SEED then owned by the admin tab
+  if (!s.config) s.config = {
+    employees: SEED.employees.map((e) => ({ ...e, active: true })),
+    categories: [...SEED.expenseCategories],
+  };
   return s;
 }
 let state = loadState();
+const EMPS = () => state.config.employees;
+const CATS = () => state.config.categories;
 
 // currentMonth is "YYYY-MM"; default to the seed month so there's data on first load
 let currentMonth = SEED_MONTH;
@@ -48,17 +55,16 @@ document.getElementById("month-prev").onclick = () => { currentMonth = shiftMont
 document.getElementById("month-next").onclick = () => { currentMonth = shiftMonth(currentMonth, 1); currentDay = 1; renderMonthLabel(); renderAll(); };
 
 // ---- tabs ----
-const viewDC = document.getElementById("view-dc");
-const viewAtt = document.getElementById("view-att");
-document.getElementById("tab-dc").onclick = () => switchTab("dc");
-document.getElementById("tab-att").onclick = () => switchTab("att");
+const TABS = ["dc", "att", "admin"];
 function switchTab(t) {
-  document.getElementById("tab-dc").classList.toggle("active", t === "dc");
-  document.getElementById("tab-att").classList.toggle("active", t === "att");
-  viewDC.hidden = t !== "dc";
-  viewAtt.hidden = t !== "att";
+  for (const id of TABS) {
+    document.getElementById("tab-" + id).classList.toggle("active", t === id);
+    document.getElementById("view-" + id).hidden = t !== id;
+  }
   if (t === "att") renderAttendance();
+  if (t === "admin") renderAdmin();
 }
+for (const id of TABS) document.getElementById("tab-" + id).onclick = () => switchTab(id);
 
 document.getElementById("reset-btn").onclick = () => {
   if (confirm(`Discard local edits for ${monthLabel(currentMonth)} and reload seed data (if any)?`)) {
@@ -99,7 +105,8 @@ function renderStaff() {
   const dayHours = monthData().hours[currentDay] || {};
   let wageTotal = 0;
   let html = "<tr><th>Name</th><th class='num'>Rate/hr</th><th>Hours</th><th class='num'>Amount</th></tr>";
-  for (const e of SEED.employees) {
+  const visible = EMPS().filter((e) => e.active || dayHours[e.id] != null);
+  for (const e of visible) {
     const h = dayHours[e.id] ?? null;
     const amt = (h || 0) * e.rate;
     wageTotal += amt;
@@ -143,17 +150,18 @@ function renderExpenses() {
   t.innerHTML = html;
   document.getElementById("dc-exp-total").textContent = "₹" + fmt(total);
 
-  const sel = document.getElementById("exp-cat");
-  if (!sel.options.length)
-    sel.innerHTML = SEED.expenseCategories.map((c) => `<option>${c}</option>`).join("");
+  document.getElementById("exp-cat-list").innerHTML =
+    CATS().map((c) => `<option value="${c}">`).join("");
   return total;
 }
 document.getElementById("exp-add").onclick = () => {
+  const item = document.getElementById("exp-cat").value.trim();
   const amt = parseFloat(document.getElementById("exp-amt").value);
-  if (!amt) return;
+  if (!item || !amt) return;
   const md = monthData();
   if (!md.expenses[currentDay]) md.expenses[currentDay] = [];
-  md.expenses[currentDay].push({ item: document.getElementById("exp-cat").value, amount: amt });
+  md.expenses[currentDay].push({ item, amount: amt });
+  document.getElementById("exp-cat").value = "";
   document.getElementById("exp-amt").value = "";
   save(); renderDC();
 };
@@ -329,11 +337,13 @@ function setAdj(empId, field, val) {
 function renderAttendance() {
   const md = monthData();
   const nDays = daysInMonth(currentMonth);
+  const hasHours = (e) => Object.values(md.hours).some((day) => day[e.id] != null);
+  const roster = EMPS().filter((e) => e.active || hasHours(e));
   const grid = document.getElementById("att-grid");
   let html = "<tr><th class='name'>Name</th>";
   for (let d = 1; d <= nDays; d++) html += `<th>${d}<br><small>${dayName(d)}</small></th>`;
   html += "<th class='num'>Hrs</th></tr>";
-  for (const e of SEED.employees) {
+  for (const e of roster) {
     let tot = 0;
     html += `<tr><td class="name">${e.name}</td>`;
     for (let d = 1; d <= nDays; d++) {
@@ -351,7 +361,7 @@ function renderAttendance() {
     <th class='num'>Loan Balance</th><th class='num'>Penalties</th><th class='num'>Incentives</th>
     <th class='num'>Monthly Payout</th></tr>`;
   let gAmt = 0, gPay = 0;
-  for (const e of SEED.employees) {
+  for (const e of roster) {
     let hrs = 0;
     for (let d = 1; d <= nDays; d++) hrs += md.hours[d]?.[e.id] || 0;
     const a = md.adjustments[e.id] || { loanTaken:0, loanDeducted:0, penalties:0, incentives:0 };
@@ -370,6 +380,69 @@ function renderAttendance() {
   p.innerHTML = phtml;
 }
 
-function renderAll() { renderDC(); renderAttendance(); }
+// ---- admin: staff & categories ----
+function setRate(empId, val) {
+  const rate = parseFloat(val);
+  if (!(rate >= 0)) { renderAdmin(); return; }
+  EMPS().find((e) => e.id === empId).rate = rate;
+  save(); renderAdmin();
+}
+function toggleActive(empId) {
+  const e = EMPS().find((e) => e.id === empId);
+  e.active = !e.active;
+  save(); renderAdmin();
+}
+function addEmployee() {
+  const name = document.getElementById("new-emp-name").value.trim();
+  const rate = parseFloat(document.getElementById("new-emp-rate").value);
+  if (!name || !(rate >= 0)) return;
+  if (EMPS().some((e) => e.name.toLowerCase() === name.toLowerCase())) {
+    alert(`"${name}" already exists.`); return;
+  }
+  const id = Math.max(0, ...EMPS().map((e) => e.id)) + 1;
+  EMPS().push({ id, name, rate, active: true });
+  document.getElementById("new-emp-name").value = "";
+  document.getElementById("new-emp-rate").value = "";
+  save(); renderAdmin();
+}
+function addCategory() {
+  const c = document.getElementById("new-cat").value.trim();
+  if (!c) return;
+  if (CATS().some((x) => x.toLowerCase() === c.toLowerCase())) {
+    alert(`"${c}" already exists.`); return;
+  }
+  CATS().push(c);
+  document.getElementById("new-cat").value = "";
+  save(); renderAdmin();
+}
+function delCategory(i) {
+  CATS().splice(i, 1);
+  save(); renderAdmin();
+}
+
+function renderAdmin() {
+  const md = monthData();
+  const monthHours = (id) =>
+    Object.values(md.hours).reduce((t, day) => t + (day[id] || 0), 0);
+  let html = `<tr><th>Name</th><th class='num'>Rate/hr</th><th class='num'>Hrs (${monthLabel(currentMonth)})</th><th>Status</th></tr>`;
+  for (const e of EMPS()) {
+    html += `<tr class="${e.active ? "" : "inactive"}"><td>${e.name}</td>
+      <td class="num"><input type="number" min="0" step="0.01" value="${e.rate}"
+        onchange="setRate(${e.id}, this.value)"></td>
+      <td class="num">${monthHours(e.id) || "–"}</td>
+      <td><button class="ghost sm ${e.active ? "" : "off"}" onclick="toggleActive(${e.id})">
+        ${e.active ? "Active" : "Inactive"}</button></td></tr>`;
+  }
+  document.getElementById("admin-staff").innerHTML = html;
+  document.getElementById("admin-staff-count").textContent =
+    EMPS().filter((e) => e.active).length + " active";
+
+  document.getElementById("admin-cats").innerHTML = CATS().map((c, i) =>
+    `<span class="chip">${c}<button class="del-btn" title="Remove" onclick="delCategory(${i})">×</button></span>`
+  ).join("");
+  document.getElementById("admin-cat-count").textContent = CATS().length + " categories";
+}
+
+function renderAll() { renderDC(); renderAttendance(); renderAdmin(); }
 renderMonthLabel();
 renderAll();
