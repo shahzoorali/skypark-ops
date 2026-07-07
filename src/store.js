@@ -7,7 +7,20 @@ import {
 import { uploadData, getUrl } from "aws-amplify/storage";
 import { generateClient } from "aws-amplify/data";
 
-const client = generateClient();
+// lazy so generateClient runs after Amplify.configure()
+let _client = null;
+const client = new Proxy({}, {
+  get(_, prop) {
+    if (!_client) _client = generateClient();
+    return _client[prop];
+  },
+});
+
+// AppSync resolves with {errors} instead of throwing — surface those as failures
+function assertOk(res) {
+  if (res?.errors?.length) throw new Error(res.errors.map((e) => e.message).join("; "));
+  return res;
+}
 
 // ---- auth ----
 export async function currentSession() {
@@ -39,9 +52,10 @@ let onSync = () => {};
 export function setSyncListener(fn) { onSync = fn; }
 function track(promise) {
   pending++; onSync(pending);
-  return promise
-    .catch((e) => { console.error("sync failed", e); onSync(-1); throw e; })
-    .finally(() => { pending--; onSync(pending); });
+  return promise.then(
+    (v) => { pending--; onSync(pending); return v; },
+    (e) => { pending--; console.error("sync failed", e); onSync(-1); throw e; }
+  );
 }
 
 // ---- config (staff & categories; admin-writable) ----
@@ -50,10 +64,12 @@ export async function loadConfig() {
   return data ? JSON.parse(data.payload) : null;
 }
 export async function createConfig(payload) {
-  await client.models.AppConfig.create({ id: "config", payload: JSON.stringify(payload) });
+  assertOk(await client.models.AppConfig.create({ id: "config", payload: JSON.stringify(payload) }));
 }
 export function saveConfig(payload) {
-  return track(client.models.AppConfig.update({ id: "config", payload: JSON.stringify(payload) }));
+  return track(
+    client.models.AppConfig.update({ id: "config", payload: JSON.stringify(payload) }).then(assertOk)
+  );
 }
 
 // ---- month data ----
@@ -93,9 +109,9 @@ export function saveDay(month, day, md) {
   });
   const body = { id, month, day, payload };
   return track((async () => {
-    if (knownDayIds.has(id)) { await client.models.DayRecord.update(body); return; }
+    if (knownDayIds.has(id)) { assertOk(await client.models.DayRecord.update(body)); return; }
     const res = await client.models.DayRecord.create(body);
-    if (res.errors?.length) await client.models.DayRecord.update(body); // lost create race
+    if (res.errors?.length) assertOk(await client.models.DayRecord.update(body)); // lost create race
     knownDayIds.add(id);
   })());
 }
@@ -103,9 +119,9 @@ export function saveDay(month, day, md) {
 export function saveAdjustments(month, adjustments) {
   const body = { id: month, payload: JSON.stringify(adjustments) };
   return track((async () => {
-    if (knownAdjIds.has(month)) { await client.models.MonthAdjustments.update(body); return; }
+    if (knownAdjIds.has(month)) { assertOk(await client.models.MonthAdjustments.update(body)); return; }
     const res = await client.models.MonthAdjustments.create(body);
-    if (res.errors?.length) await client.models.MonthAdjustments.update(body);
+    if (res.errors?.length) assertOk(await client.models.MonthAdjustments.update(body));
     knownAdjIds.add(month);
   })());
 }
