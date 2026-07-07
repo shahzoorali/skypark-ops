@@ -379,6 +379,23 @@ function toggleActive(empId) {
   e.active = !e.active;
   persistConfig(); renderAdmin();
 }
+// true only if we can prove (from months loaded into memory) the employee never
+// clocked hours — cross-month history may exist in months not yet fetched, so
+// this is a conservative "safe to hard-delete" check, not an exhaustive one
+function hasAnyRecordedHours(empId) {
+  return Object.values(state.months).some((md) =>
+    Object.values(md.hours).some((day) => day[empId] != null));
+}
+function removeEmployee(empId) {
+  const e = EMPS().find((e) => e.id === empId);
+  if (hasAnyRecordedHours(empId)) {
+    alert(`${e.name} has recorded hours on file — archive instead of removing, so payroll history stays intact.`);
+    return;
+  }
+  if (!confirm(`Remove ${e.name} entirely? This can't be undone.`)) return;
+  state.config.employees = EMPS().filter((x) => x.id !== empId);
+  persistConfig(); renderAdmin();
+}
 function addEmployee() {
   const name = document.getElementById("new-emp-name").value.trim();
   const rate = parseFloat(document.getElementById("new-emp-rate").value);
@@ -411,14 +428,19 @@ function renderAdmin() {
   const md = monthData();
   const monthHours = (id) =>
     Object.values(md.hours).reduce((t, day) => t + (day[id] || 0), 0);
-  let html = `<tr><th>Name</th><th class='num'>Rate/hr</th><th class='num'>Hrs (${monthLabel(currentMonth)})</th><th>Status</th></tr>`;
+  let html = `<tr><th>Name</th><th class='num'>Rate/hr</th><th class='num'>Hrs (${monthLabel(currentMonth)})</th><th>Status</th><th></th></tr>`;
   for (const e of EMPS()) {
+    const removable = !hasAnyRecordedHours(e.id);
     html += `<tr class="${e.active ? "" : "inactive"}"><td>${e.name}</td>
       <td class="num"><input type="number" min="0" step="0.01" value="${e.rate}"
         onchange="setRate(${e.id}, this.value)"></td>
       <td class="num">${monthHours(e.id) || "–"}</td>
-      <td><button class="ghost sm ${e.active ? "" : "off"}" onclick="toggleActive(${e.id})">
-        ${e.active ? "Active" : "Inactive"}</button></td></tr>`;
+      <td><button class="ghost sm ${e.active ? "" : "off"}" onclick="toggleActive(${e.id})"
+        title="${e.active ? "Archive: hide from day entry, keep payroll history" : "Restore to active staff"}">
+        ${e.active ? "Active" : "Archived"}</button></td>
+      <td>${removable
+        ? `<button class="del-btn" title="Remove entirely (no recorded hours yet)" onclick="removeEmployee(${e.id})">×</button>`
+        : ""}</td></tr>`;
   }
   document.getElementById("admin-staff").innerHTML = html;
   document.getElementById("admin-staff-count").textContent =
@@ -466,7 +488,7 @@ export async function startApp(session) {
   Object.assign(window, {
     setHours, delExpense, addDetail, delDetail, attachRowImg, uploadInvoice,
     ocrAutofill, showImg, showImgSrc, delInvoice, setSales, setAdj,
-    setRate, toggleActive, delCategory,
+    setRate, toggleActive, removeEmployee, delCategory,
   });
 
   // static buttons
