@@ -1,5 +1,5 @@
 // Skypark ops prototype — state = seed data + localStorage overlay
-const LS_KEY = "sp-expenses-v2";
+const LS_KEY = "sp-expenses-v3"; // bumped so the refreshed July seed replaces stale cached data
 const DOW = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
@@ -158,8 +158,8 @@ document.getElementById("exp-add").onclick = () => {
   save(); renderDC();
 };
 
-// ---- purchase detail sections (Blinkit / Instamart) ----
-const DETAIL_SECTIONS = ["blinkit", "instamart"];
+// ---- detail sections (Blinkit / Instamart purchases, Due, Discounts) ----
+const DETAIL_SECTIONS = ["blinkit", "instamart", "due", "discounts"];
 
 function detailRows(section) {
   const d = monthData().details[currentDay];
@@ -198,17 +198,21 @@ function renderDetails() {
         <td>${proof}</td>
         <td><button class="del-btn" title="Remove" onclick="delDetail('${sec}',${i})">×</button></td></tr>`;
     });
-    if (!rows.length) html += `<tr><td colspan="5" class="empty">No items yet — add manually or upload an invoice.</td></tr>`;
+    if (!rows.length) html += `<tr><td colspan="5" class="empty">No items yet — ${
+      sec === "due" || sec === "discounts" ? "add an entry below." : "add manually or upload an invoice."}</td></tr>`;
     html += `<tr class="total"><td colspan="2">Total</td><td class="num">₹${fmt(total)}</td><td></td><td></td></tr>`;
     document.getElementById("dc-" + sec).innerHTML = html;
     document.getElementById(sec + "-total").textContent = "₹" + fmt(total);
 
-    // section-level invoice gallery
-    const invs = (monthData().invoices[currentDay] || {})[sec] || [];
-    document.getElementById("inv-" + sec).innerHTML = invs.map((src, i) =>
-      `<span class="inv-wrap"><img class="thumb lg" src="${src}" onclick="showImgSrc('${sec}',${i})">
-       <button class="del-btn" title="Remove invoice" onclick="delInvoice('${sec}',${i})">×</button></span>`
-    ).join("");
+    // section-level invoice gallery (only purchase sections have one)
+    const gallery = document.getElementById("inv-" + sec);
+    if (gallery) {
+      const invs = (monthData().invoices[currentDay] || {})[sec] || [];
+      gallery.innerHTML = invs.map((src, i) =>
+        `<span class="inv-wrap"><img class="thumb lg" src="${src}" onclick="showImgSrc('${sec}',${i})">
+         <button class="del-btn" title="Remove invoice" onclick="delInvoice('${sec}',${i})">×</button></span>`
+      ).join("");
+    }
   }
 }
 

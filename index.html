@@ -70,6 +70,24 @@
       </div>
       <div class="invoice-strip" id="inv-instamart"></div>
     </section>
+    <section class="card" id="card-due">
+      <h2>Details of Due <span class="pill" id="due-total"></span></h2>
+      <table id="dc-due"></table>
+      <div class="add-row">
+        <input id="due-item" placeholder="Customer / name">
+        <input id="due-amt" type="number" min="0" placeholder="Amount">
+        <button onclick="addDetail('due')">Add</button>
+      </div>
+    </section>
+    <section class="card" id="card-discounts">
+      <h2>Discounts <span class="pill" id="discounts-total"></span></h2>
+      <table id="dc-discounts"></table>
+      <div class="add-row">
+        <input id="discounts-item" placeholder="Channel (Swiggy, Zomato…)">
+        <input id="discounts-amt" type="number" min="0" placeholder="Amount">
+        <button onclick="addDetail('discounts')">Add</button>
+      </div>
+    </section>
   </div>
 </main>
 
