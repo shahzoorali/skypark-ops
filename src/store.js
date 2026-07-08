@@ -167,10 +167,66 @@ export async function resolveInvoiceUrls(md) {
 }
 
 // ---- AI OCR (Bedrock via Lambda) ----
-export async function ocrExtractInvoice(keys, section) {
-  const res = assertOk(await client.mutations.ocrExtractInvoice({ bucket: INVOICE_BUCKET, keys, section }));
+function parseOcr(res) {
   // AppSync may deliver the Lambda's JSON string singly- or doubly-encoded
   let parsed = res.data;
   for (let i = 0; typeof parsed === "string" && i < 2; i++) parsed = JSON.parse(parsed);
-  return parsed?.items || [];
+  return parsed;
+}
+export async function ocrExtractInvoice(keys, section) {
+  const res = assertOk(await client.mutations.ocrExtractInvoice({ bucket: INVOICE_BUCKET, keys, section }));
+  return parseOcr(res)?.items || [];
+}
+// stock mode: returns { vendor, date, lines: [{item, qty, unit, rate, amount}] }
+export async function ocrExtractBill(keys) {
+  const res = assertOk(await client.mutations.ocrExtractInvoice({ bucket: INVOICE_BUCKET, keys, section: "stock" }));
+  const parsed = parseOcr(res);
+  return { vendor: parsed?.vendor || null, date: parsed?.date || null, lines: parsed?.lines || [] };
+}
+
+// ---- stock bills (goods received) ----
+export async function loadStockMonth(month) {
+  const res = assertOk(await client.models.StockBill.listStockBillByMonth({ month }, { limit: 500 }));
+  return res.data
+    .map((rec) => ({
+      id: rec.id, month: rec.month, date: rec.date, vendor: rec.vendor, status: rec.status,
+      ...JSON.parse(rec.payload),
+    }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+export function saveStockBill(bill) {
+  const { id, month, date, vendor, status, ...payload } = bill;
+  const body = { id, month, date, vendor, status, payload: JSON.stringify(payload) };
+  return track(
+    (bill._isNew
+      ? client.models.StockBill.create(body)
+      : client.models.StockBill.update(body)
+    ).then(assertOk)
+  );
+}
+
+export function deleteStockBill(id) {
+  return track(client.models.StockBill.delete({ id }).then(assertOk));
+}
+
+// Upload a bill attachment. Images are resized client-side; PDFs upload as-is.
+export async function uploadStockFile(month, file) {
+  const isPdf = file.type === "application/pdf" || file.name?.toLowerCase().endsWith(".pdf");
+  const ext = isPdf ? "pdf" : "jpg";
+  const key = `stock/${month}/${crypto.randomUUID()}.${ext}`;
+  const contentType = isPdf ? "application/pdf" : "image/jpeg";
+  await track(uploadData({ path: key, data: file, options: { contentType } }).result);
+  if (!isPdf) urlCache.set(key, URL.createObjectURL(file));
+  return key;
+}
+
+export async function resolveStockUrls(bills) {
+  const keys = bills.flatMap((b) => b.files || []).filter((k) => !urlCache.has(k));
+  await Promise.all(keys.map(async (k) => {
+    try {
+      const { url } = await getUrl({ path: k, options: { expiresIn: 3600 * 8 } });
+      urlCache.set(k, url.toString());
+    } catch (e) { console.error("stock url failed", k, e); }
+  }));
 }

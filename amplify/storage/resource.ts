@@ -5,5 +5,7 @@ export const storage = defineStorage({
   access: (allow) => ({
     // invoice photos, keyed invoices/YYYY-MM/D/...
     "invoices/*": [allow.groups(["admin", "manager"]).to(["read", "write", "delete"])],
+    // vendor bill photos/PDFs for the Stock page, keyed stock/YYYY-MM/...
+    "stock/*": [allow.groups(["admin", "manager"]).to(["read", "write", "delete"])],
   }),
 });

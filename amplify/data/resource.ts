@@ -27,6 +27,21 @@ const schema = a.schema({
     })
     .authorization((allow) => [allow.groups(["admin", "manager"]).to(["read", "create", "update", "delete"])]),
 
+  // One goods-received bill from a vendor. Bills are independent records
+  // (not folded into DayRecord) so concurrent edits can't clobber each other
+  // and a month can hold many bills per vendor.
+  StockBill: a
+    .model({
+      id: a.id().required(),
+      month: a.string().required(), // "YYYY-MM", for listing a whole month
+      date: a.string().required(), // "YYYY-MM-DD" bill/delivery date
+      vendor: a.string().required(),
+      status: a.string().required(), // "pending" | "verified"
+      payload: a.json().required(), // { lines: [{item,qty,unit,rate,amount}], files: [s3 keys], payment: {status, dueDate, paidDate}, notes }
+    })
+    .secondaryIndexes((index) => [index("month")])
+    .authorization((allow) => [allow.groups(["admin", "manager"]).to(["read", "create", "update", "delete"])]),
+
   AppConfig: a
     .model({
       id: a.id().required(), // always "config"

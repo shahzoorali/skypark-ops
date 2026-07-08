@@ -31,6 +31,7 @@
   <nav>
     <button id="tab-dc" class="tab active">Daily Closing</button>
     <button id="tab-att" class="tab">Attendance &amp; Payroll</button>
+    <button id="tab-stock" class="tab">Stock</button>
     <button id="tab-admin" class="tab">Admin</button>
   </nav>
   <span id="sync-status" title="Cloud sync status"></span>
@@ -120,6 +121,26 @@
   </section>
 </main>
 
+<main id="view-stock" hidden>
+  <section class="card wide">
+    <h2>Goods Received <span class="pill" id="stock-month-total"></span></h2>
+    <p class="hint">One record per vendor bill/delivery. Upload the bill (photo, screenshot, or PDF) and let AI fill the line items, or enter them manually. Admins verify entries.</p>
+    <div class="stock-toolbar">
+      <select id="stock-vendor-filter"><option value="">All vendors</option></select>
+      <button id="stock-new-btn">+ New bill</button>
+    </div>
+    <div class="scroll-x"><table id="stock-bills"></table></div>
+  </section>
+  <section class="card wide" id="stock-editor-card" hidden>
+    <h2 id="stock-editor-title">New bill</h2>
+    <div id="stock-editor"></div>
+  </section>
+  <section class="card wide">
+    <h2>Vendor summary <span class="pill" id="stock-outstanding"></span></h2>
+    <table id="stock-summary"></table>
+  </section>
+</main>
+
 <main id="view-admin" hidden>
   <div class="dc-grid admin-grid">
     <section class="card">
@@ -141,6 +162,15 @@
       </div>
     </section>
     <section class="card">
+      <h2>Vendors <span class="pill" id="admin-vendor-count"></span></h2>
+      <p class="hint">Suppliers shown when recording a Stock bill. Removing a vendor doesn't touch existing bills.</p>
+      <div class="chips" id="admin-vendors"></div>
+      <div class="add-row">
+        <input id="new-vendor" placeholder="New vendor">
+        <button id="add-vendor-btn">Add</button>
+      </div>
+    </section>
+    <section class="card">
       <h2>Expense Categories <span class="pill" id="admin-cat-count"></span></h2>
       <p class="hint">Suggestions shown when adding a cash expense. Managers can also type one-off items freely.</p>
       <div class="chips" id="admin-cats"></div>
@@ -154,6 +184,7 @@
 </div>
 
 <input type="file" id="file-input" accept="image/*" hidden>
+<input type="file" id="stock-file-input" accept="image/*,application/pdf" multiple hidden>
 <div id="img-modal" hidden><img id="img-modal-img"></div>
 
 <script type="module" src="/src/main.js"></script>

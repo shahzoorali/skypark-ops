@@ -6,8 +6,12 @@ const DOW = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 const GROUPS = ["Conti-chefs", "Chinese Chefs", "Helpers", "Housekeeping", "Service"];
 const UNASSIGNED = "Unassigned";
+const DEFAULT_VENDORS = [
+  "KGN Fresh", "Hyperpure", "New Arife", "Madina Chicken Centre", "Beef Shop",
+  "ID Fresh", "6th Baker", "Ratnadeep", "Cool Drinks", "Ice", "Machi House",
+];
 
-let state = { config: null, months: {} };
+let state = { config: null, months: {}, stock: {} };
 let role = "manager";
 let currentMonth = new Date().toISOString().slice(0, 7);
 let currentDay = 1;
@@ -20,15 +24,20 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const EMPS = () => state.config.employees;
 const CATS = () => state.config.categories;
+const VENDORS = () => state.config.vendors;
 
-// backfills fields onto employees loaded from before this feature existed;
-// array position doubles as the manual sort order (no separate index field)
-function normalizeEmployees() {
+// backfills fields onto config loaded from before newer features existed;
+// employee array position doubles as the manual sort order (no separate index field)
+function normalizeConfig() {
   let changed = false;
   for (const e of EMPS()) {
     if (e.group === undefined) { e.group = null; changed = true; }
     if (e.hireDate === undefined) { e.hireDate = null; changed = true; }
     if (e.fireDate === undefined) { e.fireDate = null; changed = true; }
+  }
+  if (!Array.isArray(state.config.vendors)) {
+    state.config.vendors = [...DEFAULT_VENDORS];
+    changed = true;
   }
   return changed;
 }
@@ -88,13 +97,18 @@ function renderMonthLabel() {
 async function gotoMonth(delta) {
   currentMonth = shiftMonth(currentMonth, delta);
   currentDay = 1;
+  editingBill = null; // a bill editor from another month would save into the wrong list
   renderMonthLabel();
   await ensureMonthLoaded(currentMonth);
   renderAll();
+  if (!document.getElementById("view-stock").hidden) {
+    renderStock();
+    ensureStockLoaded(currentMonth).then(renderStock).catch((e) => console.error("stock load failed", e));
+  }
 }
 
 // ---- tabs ----
-const TABS = ["dc", "att", "admin"];
+const TABS = ["dc", "att", "stock", "admin"];
 function switchTab(t) {
   for (const id of TABS) {
     document.getElementById("tab-" + id).classList.toggle("active", t === id);
@@ -103,6 +117,10 @@ function switchTab(t) {
   if (t === "dc") renderDC();
   if (t === "att") renderAttendance();
   if (t === "admin") renderAdmin();
+  if (t === "stock") {
+    renderStock(); // shows "Loading…" until the month's bills arrive
+    ensureStockLoaded(currentMonth).then(renderStock).catch((e) => console.error("stock load failed", e));
+  }
 }
 
 // ---- day strip ----
@@ -497,6 +515,21 @@ function addEmployee() {
   document.getElementById("new-emp-group").value = "";
   persistConfig(); renderAdmin();
 }
+function addVendor() {
+  const v = document.getElementById("new-vendor").value.trim();
+  if (!v) return;
+  if (VENDORS().some((x) => x.toLowerCase() === v.toLowerCase())) {
+    alert(`"${v}" already exists.`); return;
+  }
+  VENDORS().push(v);
+  document.getElementById("new-vendor").value = "";
+  persistConfig(); renderAdmin();
+}
+function delVendor(i) {
+  if (!confirm(`Remove vendor "${VENDORS()[i]}" from the list? Existing bills keep their vendor name.`)) return;
+  VENDORS().splice(i, 1);
+  persistConfig(); renderAdmin();
+}
 function addCategory() {
   const c = document.getElementById("new-cat").value.trim();
   if (!c) return;
@@ -517,7 +550,7 @@ function groupOptions(selected) {
   return opt("", UNASSIGNED) + GROUPS.map((g) => opt(g, g)).join("");
 }
 function renderAdmin() {
-  if (normalizeEmployees() && role === "admin") persistConfig();
+  if (normalizeConfig() && role === "admin") persistConfig();
   const md = monthData();
   const monthHours = (id) =>
     Object.values(md.hours).reduce((t, day) => t + (day[id] || 0), 0);
@@ -554,6 +587,320 @@ function renderAdmin() {
     `<span class="chip">${esc(c)}<button class="del-btn" title="Remove" onclick="delCategory(${i})">×</button></span>`
   ).join("");
   document.getElementById("admin-cat-count").textContent = CATS().length + " categories";
+
+  document.getElementById("admin-vendors").innerHTML = VENDORS().map((v, i) =>
+    `<span class="chip">${esc(v)}<button class="del-btn" title="Remove" onclick="delVendor(${i})">×</button></span>`
+  ).join("");
+  document.getElementById("admin-vendor-count").textContent = VENDORS().length + " vendors";
+}
+
+// ---- stock (goods received from vendors) ----
+let editingBill = null; // deep copy while editing; written back on Save
+
+const billTotal = (b) => (b.lines || []).reduce((t, l) => t + (l.amount || 0), 0);
+const payStatus = (b) => b.payment?.status || "unpaid";
+
+async function ensureStockLoaded(month) {
+  if (state.stock[month]) return;
+  const bills = await store.loadStockMonth(month);
+  await store.resolveStockUrls(bills);
+  state.stock[month] = bills;
+}
+
+function stockNew() {
+  const inMonth = todayISO().slice(0, 7) === currentMonth;
+  editingBill = {
+    _isNew: true, id: crypto.randomUUID(), month: currentMonth,
+    date: inMonth ? todayISO() : `${currentMonth}-01`,
+    vendor: "", status: "pending", lines: [], files: [],
+    payment: { status: "unpaid", dueDate: "", paidDate: "" }, notes: "",
+  };
+  renderStockEditor();
+}
+
+function stockEdit(id) {
+  const bill = (state.stock[currentMonth] || []).find((b) => b.id === id);
+  if (!bill) return;
+  editingBill = JSON.parse(JSON.stringify(bill));
+  renderStockEditor();
+}
+
+function stockCancel() { editingBill = null; renderStockEditor(); }
+
+async function stockDelete(id) {
+  const bill = (state.stock[currentMonth] || []).find((b) => b.id === id);
+  if (!bill) return;
+  if (role !== "admin" && bill.status === "verified") return;
+  if (!confirm(`Delete the ${esc(bill.vendor)} bill of ${bill.date}? This can't be undone.`)) return;
+  try {
+    await store.deleteStockBill(id);
+    state.stock[currentMonth] = state.stock[currentMonth].filter((b) => b.id !== id);
+    if (editingBill?.id === id) editingBill = null;
+    renderStock();
+  } catch (e) { console.error(e); }
+}
+
+function stockField(field, val) {
+  if (field === "vendor" && val === "__new__") {
+    const name = (prompt("New vendor name:") || "").trim();
+    if (name && !VENDORS().some((v) => v.toLowerCase() === name.toLowerCase())) {
+      VENDORS().push(name);
+      persistConfig();
+    }
+    editingBill.vendor = name || editingBill.vendor;
+  } else {
+    editingBill[field] = val;
+  }
+  renderStockEditor();
+}
+
+function stockPay(field, val) {
+  if (!editingBill.payment) editingBill.payment = { status: "unpaid", dueDate: "", paidDate: "" };
+  editingBill.payment[field] = val;
+  renderStockEditor();
+}
+
+function stockAddLine() {
+  editingBill.lines.push({ item: "", qty: null, unit: "", rate: null, amount: null });
+  renderStockEditor();
+}
+function stockDelLine(i) { editingBill.lines.splice(i, 1); renderStockEditor(); }
+function stockLine(i, field, val) {
+  const l = editingBill.lines[i];
+  if (field === "item" || field === "unit") l[field] = val;
+  else l[field] = val === "" ? null : parseFloat(val);
+  // convenience: recompute amount when qty & rate are both known
+  if ((field === "qty" || field === "rate") && l.qty != null && l.rate != null) {
+    l.amount = Math.round(l.qty * l.rate * 100) / 100;
+  }
+  renderStockEditor();
+}
+
+function stockUpload() { document.getElementById("stock-file-input").click(); }
+function stockDelFile(i) { editingBill.files.splice(i, 1); renderStockEditor(); }
+function stockShowFile(i) {
+  const url = store.invoiceUrl(editingBill.files[i]);
+  if (url) openModal(url);
+}
+
+function resizeImageFile(f) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = img.width * scale; c.height = img.height * scale;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      c.toBlob((b) => (b ? resolve(b) : reject(new Error("resize failed"))), "image/jpeg", 0.8);
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error("not an image")); };
+    img.src = URL.createObjectURL(f);
+  });
+}
+
+async function stockFilesPicked(files) {
+  if (!editingBill) return;
+  for (const f of files) {
+    try {
+      const isPdf = f.type === "application/pdf" || f.name?.toLowerCase().endsWith(".pdf");
+      const data = isPdf ? f : new File([await resizeImageFile(f)], "bill.jpg", { type: "image/jpeg" });
+      const key = await store.uploadStockFile(editingBill.month, data);
+      editingBill.files.push(key);
+    } catch (e) {
+      console.error("stock upload failed", e);
+      alert(`Couldn't upload ${f.name || "file"} — ${e.message || "try again"}.`);
+    }
+  }
+  renderStockEditor();
+}
+
+async function stockOcr() {
+  if (!editingBill?.files?.length) { alert("Upload the bill photo or PDF first."); return; }
+  const btn = document.querySelector("[data-stock-ocr]");
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Reading bill…"; }
+  try {
+    const { vendor, date, lines } = await store.ocrExtractBill(editingBill.files);
+    if (!lines.length) { alert("Couldn't read line items from the bill. Try a clearer photo or enter manually."); return; }
+    editingBill.lines.push(...lines);
+    if (!editingBill.vendor && vendor) {
+      const match = VENDORS().find((v) =>
+        v.toLowerCase().includes(vendor.toLowerCase()) || vendor.toLowerCase().includes(v.toLowerCase()));
+      if (match) editingBill.vendor = match;
+      else if (!editingBill.notes) editingBill.notes = `Bill vendor: ${vendor}`;
+    }
+    if (editingBill._isNew && date && /^\d{4}-\d{2}-\d{2}$/.test(date)) editingBill.date = date;
+    renderStockEditor();
+  } catch (e) {
+    console.error("stockOcr failed", e);
+    alert("AI reading failed — check your connection and try again.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prev; }
+  }
+}
+
+async function stockSave() {
+  const b = editingBill;
+  if (!b.vendor) { alert("Pick a vendor first."); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date)) { alert("Set the bill date."); return; }
+  b.lines = b.lines.filter((l) => (l.item || "").trim() || l.amount);
+  b.month = b.date.slice(0, 7); // bill may be dated outside the viewed month
+  try {
+    const { _isNew, ...toSave } = b;
+    await store.saveStockBill({ ...toSave, _isNew });
+    // update caches: remove from current month, insert into the bill's month if loaded
+    if (state.stock[currentMonth]) {
+      state.stock[currentMonth] = state.stock[currentMonth].filter((x) => x.id !== b.id);
+    }
+    const clean = JSON.parse(JSON.stringify(toSave));
+    if (b.month === currentMonth) {
+      state.stock[currentMonth].push(clean);
+      state.stock[currentMonth].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+    } else {
+      delete state.stock[b.month]; // force reload when that month is viewed
+      alert(`Saved into ${monthLabel(b.month)} (bill date ${b.date}).`);
+    }
+    editingBill = null;
+    renderStock();
+  } catch (e) {
+    console.error("stockSave failed", e);
+    alert("Saving the bill failed — try again.");
+  }
+}
+
+async function stockSetStatus(status) {
+  editingBill.status = status;
+  if (editingBill._isNew) { renderStockEditor(); return; } // applied on first save
+  try {
+    const { _isNew, ...toSave } = editingBill;
+    await store.saveStockBill(toSave);
+    const bill = (state.stock[currentMonth] || []).find((x) => x.id === editingBill.id);
+    if (bill) bill.status = status;
+    renderStock();
+  } catch (e) { console.error(e); alert("Updating status failed — try again."); }
+}
+const stockVerify = () => stockSetStatus("verified");
+const stockUnverify = () => stockSetStatus("pending");
+
+function renderStock() {
+  const bills = state.stock[currentMonth];
+  const billsEl = document.getElementById("stock-bills");
+  if (!bills) { billsEl.innerHTML = `<tr><td class="empty">Loading…</td></tr>`; renderStockEditor(); return; }
+
+  const filterEl = document.getElementById("stock-vendor-filter");
+  const filter = filterEl.value;
+  const names = [...new Set([...VENDORS(), ...bills.map((b) => b.vendor)])];
+  filterEl.innerHTML = `<option value="">All vendors</option>` +
+    names.map((v) => `<option ${v === filter ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+
+  const shown = filter ? bills.filter((b) => b.vendor === filter) : bills;
+  let html = `<tr><th>Date</th><th>Vendor</th><th class='num'>Items</th><th class='num'>Total</th>
+    <th>Payment</th><th>Status</th><th></th><th></th></tr>`;
+  for (const b of shown) {
+    const total = billTotal(b);
+    const canEdit = role === "admin" || b.status !== "verified";
+    html += `<tr>
+      <td>${esc(b.date)}</td><td>${esc(b.vendor)}</td>
+      <td class="num">${(b.lines || []).length}</td><td class="num">₹${fmt(total)}</td>
+      <td><span class="pay-chip pay-${payStatus(b)}">${payStatus(b)}</span>${
+        b.payment?.dueDate && payStatus(b) !== "paid" ? ` <small>due ${esc(b.payment.dueDate)}</small>` : ""}</td>
+      <td>${b.status === "verified" ? `<span class="status-chip ok">✓ verified</span>` : `<span class="status-chip pending">pending</span>`}</td>
+      <td><button class="ghost sm" onclick="stockEdit('${b.id}')">${canEdit ? "Edit" : "View"}</button></td>
+      <td>${canEdit ? `<button class="del-btn" title="Delete bill" onclick="stockDelete('${b.id}')">×</button>` : ""}</td></tr>`;
+  }
+  if (!shown.length) html += `<tr><td colspan="8" class="empty">No bills recorded this month — click “+ New bill”.</td></tr>`;
+  billsEl.innerHTML = html;
+  document.getElementById("stock-month-total").textContent =
+    "₹" + fmt(shown.reduce((t, b) => t + billTotal(b), 0));
+
+  // per-vendor summary over the whole month (unfiltered)
+  const byVendor = new Map();
+  for (const b of bills) {
+    const s = byVendor.get(b.vendor) || { count: 0, total: 0, due: 0 };
+    const t = billTotal(b);
+    s.count++; s.total += t;
+    if (payStatus(b) !== "paid") s.due += t;
+    byVendor.set(b.vendor, s);
+  }
+  let sh = `<tr><th>Vendor</th><th class='num'>Bills</th><th class='num'>Total value</th><th class='num'>Outstanding</th></tr>`;
+  let out = 0;
+  for (const [v, s] of [...byVendor.entries()].sort((a, z) => z[1].total - a[1].total)) {
+    out += s.due;
+    sh += `<tr><td>${esc(v)}</td><td class="num">${s.count}</td>
+      <td class="num">₹${fmt(s.total)}</td><td class="num">${s.due ? `<b>₹${fmt(s.due)}</b>` : "—"}</td></tr>`;
+  }
+  if (!byVendor.size) sh += `<tr><td colspan="4" class="empty">No bills yet.</td></tr>`;
+  document.getElementById("stock-summary").innerHTML = sh;
+  document.getElementById("stock-outstanding").textContent = "₹" + fmt(out) + " outstanding";
+
+  renderStockEditor();
+}
+
+function renderStockEditor() {
+  const card = document.getElementById("stock-editor-card");
+  if (!editingBill) { card.hidden = true; return; }
+  card.hidden = false;
+  const b = editingBill;
+  const canEdit = role === "admin" || b.status !== "verified";
+  const dis = canEdit ? "" : "disabled";
+  document.getElementById("stock-editor-title").textContent =
+    (b._isNew ? "New bill" : `${b.vendor || "Bill"} — ${b.date}`) + (b.status === "verified" ? " (verified)" : "");
+
+  const vendorOpts = [...new Set([...VENDORS(), ...(b.vendor ? [b.vendor] : [])])]
+    .map((v) => `<option ${v === b.vendor ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+
+  let lines = `<tr><th>#</th><th>Item</th><th class='num'>Qty</th><th>Unit</th><th class='num'>Rate</th><th class='num'>Amount</th><th></th></tr>`;
+  b.lines.forEach((l, i) => {
+    lines += `<tr><td>${i + 1}</td>
+      <td><input class="st-item" value="${esc(l.item || "")}" ${dis} onchange="stockLine(${i},'item',this.value)"></td>
+      <td class="num"><input type="number" min="0" step="0.01" class="st-num" value="${l.qty ?? ""}" ${dis} onchange="stockLine(${i},'qty',this.value)"></td>
+      <td><input class="st-unit" value="${esc(l.unit || "")}" placeholder="kg" ${dis} onchange="stockLine(${i},'unit',this.value)"></td>
+      <td class="num"><input type="number" min="0" step="0.01" class="st-num" value="${l.rate ?? ""}" ${dis} onchange="stockLine(${i},'rate',this.value)"></td>
+      <td class="num"><input type="number" min="0" step="0.01" class="st-num" value="${l.amount ?? ""}" ${dis} onchange="stockLine(${i},'amount',this.value)"></td>
+      <td>${canEdit ? `<button class="del-btn" title="Remove line" onclick="stockDelLine(${i})">×</button>` : ""}</td></tr>`;
+  });
+  lines += `<tr class="total"><td colspan="5">Bill total</td><td class="num">₹${fmt(billTotal(b))}</td><td></td></tr>`;
+
+  const files = (b.files || []).map((k, i) => {
+    const url = store.invoiceUrl(k);
+    const isPdf = k.endsWith(".pdf");
+    const view = isPdf
+      ? (url ? `<a class="pdf-chip" href="${url}" target="_blank" rel="noopener">📄 PDF ${i + 1}</a>` : `<span class="pdf-chip">📄 syncing…</span>`)
+      : (url ? `<img class="thumb lg" src="${url}" onclick="stockShowFile(${i})">` : `<span title="Photo syncing…">⏳</span>`);
+    return `<span class="inv-wrap">${view}${canEdit ? `<button class="del-btn" title="Remove file" onclick="stockDelFile(${i})">×</button>` : ""}</span>`;
+  }).join("");
+
+  const p = b.payment || { status: "unpaid", dueDate: "", paidDate: "" };
+  document.getElementById("stock-editor").innerHTML = `
+    <div class="stock-form-row">
+      <label>Vendor <select ${dis} onchange="stockField('vendor', this.value)">
+        <option value="">— select —</option>${vendorOpts}
+        ${role === "admin" && canEdit ? `<option value="__new__">＋ Add new vendor…</option>` : ""}
+      </select></label>
+      <label>Bill date <input type="date" value="${esc(b.date)}" ${dis} onchange="stockField('date', this.value)"></label>
+      <label>Payment <select ${dis} onchange="stockPay('status', this.value)">
+        ${["unpaid", "partial", "paid"].map((s) => `<option ${p.status === s ? "selected" : ""}>${s}</option>`).join("")}
+      </select></label>
+      <label>Due date <input type="date" value="${esc(p.dueDate || "")}" ${dis} onchange="stockPay('dueDate', this.value)"></label>
+      <label>Paid date <input type="date" value="${esc(p.paidDate || "")}" ${dis} onchange="stockPay('paidDate', this.value)"></label>
+    </div>
+    ${canEdit ? `<div class="section-actions">
+      <button class="ghost" onclick="stockUpload()">📷 Upload bill (photo / PDF)</button>
+      <button class="ghost ocr" data-stock-ocr ${b.files?.length ? "" : "disabled"} onclick="stockOcr()">✨ AI autofill from bill</button>
+      <button class="ghost" onclick="stockAddLine()">＋ Add line</button>
+    </div>` : ""}
+    <div class="invoice-strip">${files}</div>
+    <div class="scroll-x"><table id="stock-lines">${lines}</table></div>
+    <div class="stock-form-row">
+      <label class="grow">Notes <input value="${esc(b.notes || "")}" ${dis} onchange="stockField('notes', this.value)"></label>
+    </div>
+    <div class="section-actions">
+      ${canEdit ? `<button class="primary" onclick="stockSave()">Save bill</button>` : ""}
+      ${role === "admin" && !b._isNew && b.status !== "verified" ? `<button class="ghost" onclick="stockVerify()">✅ Verify</button>` : ""}
+      ${role === "admin" && !b._isNew && b.status === "verified" ? `<button class="ghost" onclick="stockUnverify()">Undo verify</button>` : ""}
+      <button class="ghost" onclick="stockCancel()">Close</button>
+    </div>`;
 }
 
 function renderAll() { renderDC(); renderAttendance(); if (role === "admin") renderAdmin(); }
@@ -596,7 +943,9 @@ export async function startApp(session) {
   Object.assign(window, {
     setHours, delExpense, addDetail, delDetail, attachRowImg, uploadInvoice,
     ocrAutofill, showImg, showImgSrc, delInvoice, setSales, setAdj,
-    setRate, fireEmployee, rehireEmployee, setGroup, moveEmployee, removeEmployee, delCategory,
+    setRate, fireEmployee, rehireEmployee, setGroup, moveEmployee, removeEmployee, delCategory, delVendor,
+    stockEdit, stockDelete, stockCancel, stockField, stockPay, stockLine, stockAddLine,
+    stockDelLine, stockUpload, stockDelFile, stockShowFile, stockOcr, stockSave, stockVerify, stockUnverify,
   });
 
   // static buttons
@@ -619,6 +968,14 @@ export async function startApp(session) {
   document.querySelectorAll("[data-ocr]").forEach((b) => b.onclick = () => ocrAutofill(b.dataset.ocr));
   document.getElementById("add-emp-btn").onclick = addEmployee;
   document.getElementById("add-cat-btn").onclick = addCategory;
+  document.getElementById("add-vendor-btn").onclick = addVendor;
+  document.getElementById("stock-new-btn").onclick = stockNew;
+  document.getElementById("stock-vendor-filter").onchange = renderStock;
+  document.getElementById("stock-file-input").onchange = (ev) => {
+    const files = [...ev.target.files];
+    ev.target.value = "";
+    if (files.length) stockFilesPicked(files);
+  };
   document.getElementById("signout-btn").onclick = async () => { await store.logout(); location.reload(); };
 
   // managers don't see the admin tab
@@ -634,7 +991,7 @@ export async function startApp(session) {
 
   state.config = await store.loadConfig();
   await seedIfEmpty();
-  if (normalizeEmployees() && role === "admin") persistConfig();
+  if (normalizeConfig() && role === "admin") persistConfig();
   await ensureMonthLoaded(currentMonth);
   renderMonthLabel();
   renderAll();

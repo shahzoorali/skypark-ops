@@ -26,5 +26,6 @@ backend.ocrInvoice.resources.lambda.addToRolePolicy(
   })
 );
 
-// S3: read-only access to the invoice photos this function is asked to OCR.
+// S3: read-only access to the photos/PDFs this function is asked to OCR.
 backend.storage.resources.bucket.grantRead(backend.ocrInvoice.resources.lambda, "invoices/*");
+backend.storage.resources.bucket.grantRead(backend.ocrInvoice.resources.lambda, "stock/*");
