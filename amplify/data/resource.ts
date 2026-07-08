@@ -1,4 +1,5 @@
 import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
+import { ocrInvoice } from "../functions/ocr-invoice/resource";
 
 /**
  * Documents mirror the frontend's state shape so the data layer swap is thin:
@@ -35,6 +36,19 @@ const schema = a.schema({
       allow.groups(["manager"]).to(["read"]),
       allow.groups(["admin"]).to(["read", "create", "update"]),
     ]),
+
+  // Reads the given S3 invoice photo(s) via Bedrock (Claude Haiku 4.5 vision)
+  // and returns extracted {item, amount} line items as a JSON string.
+  ocrExtractInvoice: a
+    .mutation()
+    .arguments({
+      bucket: a.string().required(),
+      keys: a.string().array().required(),
+      section: a.string().required(),
+    })
+    .returns(a.json())
+    .authorization((allow) => [allow.groups(["admin", "manager"])])
+    .handler(a.handler.function(ocrInvoice)),
 });
 
 export type Schema = ClientSchema<typeof schema>;

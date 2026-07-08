@@ -14,6 +14,10 @@ let currentDay = 1;
 
 const fmt = (n) => (Math.round(n * 100) / 100).toLocaleString("en-IN");
 const todayISO = () => new Date().toISOString().slice(0, 10);
+// user-entered text (names, items, categories — and OCR output read from photos)
+// is interpolated into innerHTML everywhere; escape it at every render site
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const EMPS = () => state.config.employees;
 const CATS = () => state.config.categories;
 
@@ -39,7 +43,10 @@ function isWithinEmployment(e, month, day) {
 function groupEmployees(list) {
   const byGroup = new Map();
   for (const g of [...GROUPS, UNASSIGNED]) byGroup.set(g, []);
-  for (const e of list) byGroup.get(e.group || UNASSIGNED).push(e);
+  for (const e of list) {
+    const g = byGroup.has(e.group) ? e.group : UNASSIGNED; // unknown group values fall back safely
+    byGroup.get(g).push(e);
+  }
   return [...byGroup.entries()].filter(([, members]) => members.length);
 }
 
@@ -140,7 +147,7 @@ function renderStaff() {
       const btn = (v, label) =>
         `<button class="${h === v ? "sel" : ""}" onclick="setHours(${e.id},${v})">${label}</button>`;
       const customVal = h !== null && !isPreset ? h : "";
-      html += `<tr><td>${e.name}</td><td class="num">${e.rate}</td>
+      html += `<tr><td>${esc(e.name)}</td><td class="num">${e.rate}</td>
         <td><span class="hrs-toggle">${btn(0, "Off")}${btn(9, "9")}${btn(18, "18")}<input
           class="hrs-custom ${h !== null && !isPreset ? "sel" : ""}" type="number" min="0" step="0.5"
           placeholder="custom" value="${customVal}"
@@ -174,7 +181,7 @@ function renderExpenses(wageTotal) {
   let html = "<tr><th>Item</th><th class='num'>Amount</th><th></th><th></th></tr>";
   rows.forEach((r, i) => {
     total += r.amount;
-    html += `<tr><td>${r.item}</td><td class="num">${fmt(r.amount)}</td>
+    html += `<tr><td>${esc(r.item)}</td><td class="num">${fmt(r.amount)}</td>
       <td>${imgCell("exp", r, i)}</td>
       <td><button class="del-btn" title="Remove" onclick="delExpense(${i})">×</button></td></tr>`;
   });
@@ -184,7 +191,7 @@ function renderExpenses(wageTotal) {
   document.getElementById("dc-today-total").textContent =
     `TOTAL EXPENSES TODAY ₹${fmt(wageTotal - total)}`;
   document.getElementById("exp-cat-list").innerHTML =
-    CATS().map((c) => `<option value="${c}">`).join("");
+    CATS().map((c) => `<option value="${esc(c)}">`).join("");
   return total;
 }
 
@@ -221,7 +228,7 @@ function renderDetails() {
     let html = "<tr><th>S.no</th><th>Item</th><th class='num'>Amount</th><th></th><th></th></tr>";
     rows.forEach((r, i) => {
       total += r.amount;
-      html += `<tr><td>${i + 1}</td><td>${r.item}</td><td class="num">${fmt(r.amount)}</td>
+      html += `<tr><td>${i + 1}</td><td>${esc(r.item)}</td><td class="num">${fmt(r.amount)}</td>
         <td>${imgCell(sec, r, i)}</td>
         <td><button class="del-btn" title="Remove" onclick="delDetail('${sec}',${i})">×</button></td></tr>`;
     });
@@ -283,6 +290,10 @@ fileInput.onchange = () => {
     }, "image/jpeg", 0.8);
     URL.revokeObjectURL(img.src);
   };
+  img.onerror = () => {
+    URL.revokeObjectURL(img.src);
+    alert("That file doesn't look like an image — please choose a photo (JPG/PNG).");
+  };
   img.src = URL.createObjectURL(f);
 };
 
@@ -303,13 +314,27 @@ function showImgSrc(section, i) {
   openModal(store.invoiceUrl(monthData().invoices[currentDay][section][i]));
 }
 
-// ---- AI OCR autofill (stub — integration point) ----
-function ocrAutofill(section) {
+// ---- AI OCR autofill (Bedrock: Claude Haiku 4.5 vision, via ocrInvoice Lambda) ----
+async function ocrAutofill(section) {
   const invs = (monthData().invoices[currentDay] || {})[section] || [];
   if (!invs.length) { alert("Upload an invoice photo first, then run AI OCR autofill."); return; }
-  // Integration point: a Lambda can fetch these S3 keys, call a vision model,
-  // and return {item, amount} rows to push into details[currentDay][section].
-  alert("AI OCR coming soon: the uploaded invoice will be read automatically and line items filled into this table.");
+  const btn = document.querySelector(`[data-ocr="${section}"]`);
+  const prevLabel = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Reading…"; }
+  try {
+    const items = await store.ocrExtractInvoice(invs, section);
+    if (!items.length) { alert("Couldn't read any line items from the invoice photo(s). Try a clearer photo or add items manually."); return; }
+    const md = monthData();
+    if (!md.details[currentDay]) md.details[currentDay] = {};
+    if (!md.details[currentDay][section]) md.details[currentDay][section] = [];
+    md.details[currentDay][section].push(...items);
+    persistDay(); renderDC();
+  } catch (e) {
+    console.error("ocrAutofill failed", e);
+    alert("AI OCR failed — check your connection and try again.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = prevLabel; }
+  }
 }
 
 // ---- sales & reconciliation ----
@@ -370,7 +395,7 @@ function renderAttendance() {
   html += "<th class='num'>Hrs</th></tr>";
   for (const e of roster) {
     let tot = 0;
-    html += `<tr><td class="name">${e.name}</td>`;
+    html += `<tr><td class="name">${esc(e.name)}</td>`;
     for (let d = 1; d <= nDays; d++) {
       const h = md.hours[d]?.[e.id];
       tot += h || 0;
@@ -395,7 +420,7 @@ function renderAttendance() {
     gAmt += amt; gPay += payout;
     const inp = (f) => `<td class="num"><input type="number" value="${a[f] || ""}"
       onchange="setAdj(${e.id},'${f}',this.value)"></td>`;
-    phtml += `<tr><td>${e.name}</td><td class="num">${e.rate}</td><td class="num">${hrs}</td>
+    phtml += `<tr><td>${esc(e.name)}</td><td class="num">${e.rate}</td><td class="num">${hrs}</td>
       <td class="num">${fmt(amt)}</td>${inp("loanTaken")}${inp("loanDeducted")}
       <td class="num">${fmt(a.loanTaken - a.loanDeducted)}</td>${inp("penalties")}${inp("incentives")}
       <td class="num"><b>₹${fmt(payout)}</b></td></tr>`;
@@ -502,7 +527,7 @@ function renderAdmin() {
     html += `<tr class="group-row"><td colspan="9">${group}</td></tr>`;
     members.forEach((e, i) => {
       const removable = !hasAnyRecordedHours(e.id);
-      html += `<tr class="${e.active ? "" : "inactive"}"><td>${e.name}</td>
+      html += `<tr class="${e.active ? "" : "inactive"}"><td>${esc(e.name)}</td>
         <td><select onchange="setGroup(${e.id}, this.value)">${groupOptions(e.group)}</select></td>
         <td class="num"><input type="number" min="0" step="0.01" value="${e.rate}"
           onchange="setRate(${e.id}, this.value)"></td>
@@ -526,7 +551,7 @@ function renderAdmin() {
     EMPS().filter((e) => e.active).length + " active";
 
   document.getElementById("admin-cats").innerHTML = CATS().map((c, i) =>
-    `<span class="chip">${c}<button class="del-btn" title="Remove" onclick="delCategory(${i})">×</button></span>`
+    `<span class="chip">${esc(c)}<button class="del-btn" title="Remove" onclick="delCategory(${i})">×</button></span>`
   ).join("");
   document.getElementById("admin-cat-count").textContent = CATS().length + " categories";
 }
@@ -546,7 +571,11 @@ async function seedIfEmpty() {
   if (role !== "admin") return;
   const seedMd = await store.loadMonth(SEED_MONTH);
   const isEmpty = !Object.keys(seedMd.hours).length && !Object.keys(seedMd.expenses).length;
-  if (!isEmpty) { state.months[SEED_MONTH] = seedMd; return; }
+  if (!isEmpty) {
+    await store.resolveInvoiceUrls(seedMd); // ensureMonthLoaded will skip this month — resolve here
+    state.months[SEED_MONTH] = seedMd;
+    return;
+  }
   const s = SEED.months[SEED_MONTH];
   const md = { ...emptyMonth(), ...JSON.parse(JSON.stringify(s)) };
   state.months[SEED_MONTH] = md;

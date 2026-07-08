@@ -6,6 +6,9 @@ import {
 } from "aws-amplify/auth";
 import { uploadData, getUrl } from "aws-amplify/storage";
 import { generateClient } from "aws-amplify/data";
+import outputs from "../amplify_outputs.json";
+
+const INVOICE_BUCKET = outputs.storage.bucket_name;
 
 // lazy so generateClient runs after Amplify.configure()
 let _client = null;
@@ -35,7 +38,14 @@ export async function currentSession() {
 }
 
 export async function login(email, password, newPassword) {
-  let out = await signIn({ username: email, password });
+  let out;
+  try {
+    out = await signIn({ username: email, password });
+  } catch (e) {
+    // already signed in (e.g. retrying after a failed boot) — reuse the session
+    if (e.name === "UserAlreadyAuthenticatedException") return currentSession();
+    throw e;
+  }
   if (out.nextStep?.signInStep === "CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED") {
     if (!newPassword) return { needNewPassword: true };
     out = await confirmSignIn({ challengeResponse: newPassword });
@@ -154,4 +164,13 @@ export async function resolveInvoiceUrls(md) {
       urlCache.set(k, url.toString());
     } catch (e) { console.error("invoice url failed", k, e); }
   }));
+}
+
+// ---- AI OCR (Bedrock via Lambda) ----
+export async function ocrExtractInvoice(keys, section) {
+  const res = assertOk(await client.mutations.ocrExtractInvoice({ bucket: INVOICE_BUCKET, keys, section }));
+  // AppSync may deliver the Lambda's JSON string singly- or doubly-encoded
+  let parsed = res.data;
+  for (let i = 0; typeof parsed === "string" && i < 2; i++) parsed = JSON.parse(parsed);
+  return parsed?.items || [];
 }
