@@ -788,13 +788,21 @@ function renderStock() {
   const billsEl = document.getElementById("stock-bills");
   if (!bills) { billsEl.innerHTML = `<tr><td class="empty">Loading…</td></tr>`; renderStockEditor(); return; }
 
+  // day filter — dates present in this month's bills, newest last (matches bill sort order)
+  const dayEl = document.getElementById("stock-day-filter");
+  const days = [...new Set(bills.map((b) => b.date))].sort();
+  const dayFilter = days.includes(dayEl.value) ? dayEl.value : ""; // drop a stale day after month change
+  dayEl.innerHTML = `<option value="">All days</option>` +
+    days.map((d) => `<option ${d === dayFilter ? "selected" : ""} value="${esc(d)}">${esc(d)}</option>`).join("");
+  const dayBills = dayFilter ? bills.filter((b) => b.date === dayFilter) : bills;
+
   const filterEl = document.getElementById("stock-vendor-filter");
   const filter = filterEl.value;
-  const names = [...new Set([...VENDORS(), ...bills.map((b) => b.vendor)])];
+  const names = [...new Set([...VENDORS(), ...dayBills.map((b) => b.vendor)])];
   filterEl.innerHTML = `<option value="">All vendors</option>` +
     names.map((v) => `<option ${v === filter ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
 
-  const shown = filter ? bills.filter((b) => b.vendor === filter) : bills;
+  const shown = filter ? dayBills.filter((b) => b.vendor === filter) : dayBills;
   let html = `<tr><th>Date</th><th>Vendor</th><th class='num'>Items</th><th class='num'>Total</th>
     <th>Payment</th><th>Status</th><th></th><th></th></tr>`;
   for (const b of shown) {
@@ -809,14 +817,15 @@ function renderStock() {
       <td><button class="ghost sm" onclick="stockEdit('${b.id}')">${canEdit ? "Edit" : "View"}</button></td>
       <td>${canEdit ? `<button class="del-btn" title="Delete bill" onclick="stockDelete('${b.id}')">×</button>` : ""}</td></tr>`;
   }
-  if (!shown.length) html += `<tr><td colspan="8" class="empty">No bills recorded this month — click “+ New bill”.</td></tr>`;
+  if (!shown.length) html += `<tr><td colspan="8" class="empty">${
+    dayFilter ? `No bills recorded for ${esc(dayFilter)}.` : "No bills recorded this month — click “+ New bill”."}</td></tr>`;
   billsEl.innerHTML = html;
   document.getElementById("stock-month-total").textContent =
     "₹" + fmt(shown.reduce((t, b) => t + billTotal(b), 0));
 
-  // per-vendor summary over the whole month (unfiltered)
+  // per-vendor summary over the selected day (or whole month when no day is picked), unfiltered by vendor
   const byVendor = new Map();
-  for (const b of bills) {
+  for (const b of dayBills) {
     const s = byVendor.get(b.vendor) || { count: 0, total: 0, due: 0 };
     const t = billTotal(b);
     s.count++; s.total += t;
@@ -971,6 +980,7 @@ export async function startApp(session) {
   document.getElementById("add-vendor-btn").onclick = addVendor;
   document.getElementById("stock-new-btn").onclick = stockNew;
   document.getElementById("stock-vendor-filter").onchange = renderStock;
+  document.getElementById("stock-day-filter").onchange = renderStock;
   document.getElementById("stock-file-input").onchange = (ev) => {
     const files = [...ev.target.files];
     ev.target.value = "";

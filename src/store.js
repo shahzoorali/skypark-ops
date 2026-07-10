@@ -188,18 +188,25 @@ export async function ocrExtractBill(keys) {
 export async function loadStockMonth(month) {
   const res = assertOk(await client.models.StockBill.listStockBillByMonth({ month }, { limit: 500 }));
   return res.data
-    .map((rec) => ({
-      id: rec.id, month: rec.month, date: rec.date, vendor: rec.vendor, status: rec.status,
-      ...JSON.parse(rec.payload),
-    }))
+    .map((rec) => {
+      // drop any _isNew that older versions wrongly persisted into the payload,
+      // so editing an existing bill can't be mistaken for a create
+      const { _isNew, ...payload } = JSON.parse(rec.payload);
+      return {
+        id: rec.id, month: rec.month, date: rec.date, vendor: rec.vendor, status: rec.status,
+        ...payload,
+      };
+    })
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
 export function saveStockBill(bill) {
-  const { id, month, date, vendor, status, ...payload } = bill;
+  // _isNew is a client-only flag (create vs update); it must never land in the stored payload,
+  // or a later edit reloads it as true and re-issues create() against an existing id.
+  const { id, month, date, vendor, status, _isNew, ...payload } = bill;
   const body = { id, month, date, vendor, status, payload: JSON.stringify(payload) };
   return track(
-    (bill._isNew
+    (_isNew
       ? client.models.StockBill.create(body)
       : client.models.StockBill.update(body)
     ).then(assertOk)
